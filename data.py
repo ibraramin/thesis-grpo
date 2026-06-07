@@ -11,7 +11,6 @@ import re
 from datasets import load_dataset, Dataset
 
 # ── Chat template for Qwen2.5 ──────────────────────────────────
-# Forces assistant responses inside <think></think> tags
 QWEN_CHAT_TEMPLATE = """\
 <|im_start|>system
 You are a helpful mathematical reasoning assistant. Always structure your answer by placing your step-by-step reasoning inside <think></think> tags, and your final answer inside <answer></answer> tags.<|im_end|>
@@ -20,16 +19,23 @@ You are a helpful mathematical reasoning assistant. Always structure your answer
 <|im_start|>assistant
 {completion}<|im_end|>"""
 
+QWEN_PROMPT_TEMPLATE = """\
+<|im_start|>system
+You are a helpful mathematical reasoning assistant. Always structure your answer by placing your step-by-step reasoning inside <think></think> tags, and your final answer inside <answer></answer> tags.<|im_end|>
+<|im_start|>user
+{problem}<|im_end|>
+<|im_start|>assistant
+"""
+
 
 def format_sft_chat(problem: str, completion: str) -> str:
-    """Format a problem+completion pair using the Qwen2.5 chat template."""
-    content = QWEN_CHAT_TEMPLATE.format(problem=problem, completion=completion)
-    return content
+    """Format a problem+completion pair for SFT (closed assistant turn)."""
+    return QWEN_CHAT_TEMPLATE.format(problem=problem, completion=completion)
 
 
 def format_grpo_prompt(problem: str) -> str:
-    """Format a problem as a GRPO prompt (no completion)."""
-    return QWEN_CHAT_TEMPLATE.format(problem=problem, completion="")
+    """Format a problem as a GRPO prompt (open-ended assistant turn)."""
+    return QWEN_PROMPT_TEMPLATE.format(problem=problem)
 
 
 # ── SFT Dataset ────────────────────────────────────────────────
