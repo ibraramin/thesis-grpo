@@ -36,6 +36,7 @@ training:
     num_generations: 16       # G — group size
     max_prompt_length: 256
     max_completion_length: 1792
+    gradient_accumulation_steps: 16  # effective batch: 16 prompts × 16 completions = 256
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
     difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)

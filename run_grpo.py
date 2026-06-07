@@ -350,7 +350,7 @@ def main():
         output_dir=output_dir,
         num_train_epochs=grpo_cfg["epochs"],
         per_device_train_batch_size=1,  # GRPO generates G completions per prompt
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=grpo_cfg.get("gradient_accumulation_steps", 16),
         learning_rate=grpo_cfg["learning_rate"],
         lr_scheduler_type="cosine",
         warmup_ratio=grpo_cfg["warmup_ratio"],
