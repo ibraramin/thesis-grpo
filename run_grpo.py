@@ -226,8 +226,9 @@ def main():
             )
             dataset = filter_non_all_zero(
                 dataset, filter_model, tokenizer,
-                group_size=1,              # Probe: single deterministic attempt
-                max_completion=256,        # Probe: 256 tokens (correct answer appears early)
+                group_size=grpo_cfg.get("filter_probe", {}).get("group_size", 2),
+                max_completion=grpo_cfg.get("filter_probe", {}).get("max_completion_length", 1024),
+                batch_size=grpo_cfg.get("filter_probe", {}).get("batch_size", 4),
             )
             print(f"[GRPO] Filtered dataset size: {len(dataset)} (removed all-zero trajectories)")
             if len(dataset) == 0:

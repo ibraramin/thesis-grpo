@@ -107,7 +107,7 @@ def load_grpo_dataset(config: dict, max_samples: int = 2500) -> Dataset:
 # ── All-Zero Filter ────────────────────────────────────────────
 
 def filter_non_all_zero(grpo_dataset: Dataset, sft_model, tokenizer,
-                        group_size: int = 16, max_completion: int = 1792,
+                        group_size: int = 2, max_completion: int = 1024,
                         batch_size: int = 4) -> Dataset:
     """
     Filter the GRPO dataset to only include problems where the SFT-primed
@@ -119,8 +119,8 @@ def filter_non_all_zero(grpo_dataset: Dataset, sft_model, tokenizer,
     NOTE: This is computationally expensive. Run once after SFT training.
     On the 3090 this is feasible; on smaller GPUs use a smaller probe set.
 
-    By default, uses a smaller probe (G=4, 512 tokens) vs full training (G=16, 1792)
-    to keep filtering practical. The probe only needs to find ONE correct answer.
+    Defaults: G=2 (2 samples per problem), 1024 tokens per completion.
+    For a 1.5B model this balances coverage vs throughput.
     """
     import torch
     from tqdm import tqdm
