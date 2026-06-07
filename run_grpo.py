@@ -213,6 +213,8 @@ def main():
             import shutil
             if os.path.exists(filtered_path):
                 shutil.rmtree(filtered_path)
+            if dataset is None:
+                dataset = load_grpo_dataset(cfg, max_samples=grpo_cfg["max_samples"])
             print("[GRPO] Running all-zero filter (this is expensive, ~10-30 min)...")
             sft_path = args.sft_checkpoint
             print(f"[GRPO] Loading SFT base model for filtering: {sft_path}")
