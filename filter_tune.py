@@ -34,6 +34,8 @@ def parse_args():
     parser.add_argument("--max-completion", type=int, default=1024)
     parser.add_argument("--output", default=OUTPUT_DIR)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--debug", action="store_true",
+                        help="Save raw completions for first N samples to debug_completions.json")
     return parser.parse_args()
 
 
@@ -138,6 +140,7 @@ def main():
 
         results = []
         correct_count = 0
+        debug_entries = {} if args.debug else None
 
         for i, output in enumerate(outputs):
             completions = [c.text for c in output.outputs]
@@ -153,6 +156,15 @@ def main():
             if any_correct:
                 correct_count += 1
 
+            if debug_entries is not None:
+                debug_entries[str(i)] = {
+                    "problem": samples[i]["problem"][:200],
+                    "ground_truth": answers[i],
+                    "completions": completions,
+                    "any_correct": any_correct,
+                    "num_correct": num_correct,
+                }
+
         # ── Save per-problem results ─────────────────────────────
         csv_path = os.path.join(args.output, f"g{g}_results.csv")
         with open(csv_path, "w", newline="") as f:
@@ -165,6 +177,13 @@ def main():
         print(f"  {line}")
         print(f"  Results: {csv_path}")
         summary_lines.append(line + "\n")
+
+        # ── Save debug completions ───────────────────────────────
+        if debug_entries is not None:
+            debug_path = os.path.join(args.output, f"debug_g{g}_completions.json")
+            with open(debug_path, "w") as f:
+                json.dump(debug_entries, f, indent=2)
+            print(f"  Debug: {debug_path}")
 
     # ── Save summary ────────────────────────────────────────────
     summary_path = os.path.join(args.output, "summary.txt")
