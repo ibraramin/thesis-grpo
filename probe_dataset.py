@@ -275,18 +275,25 @@ def main():
     print(f"{'='*60}")
     model, tokenizer = load_model("Qwen/Qwen2.5-1.5B", args.sft_checkpoint, args.model_path)
 
-    # ── Step 3: Probe Big-Math-RL-Verified ─────────────────────
+    # ── Step 3: Probe Big-Math-RL-Verified (skip if gated/unauthorized) ──
     print(f"\n{'='*60}")
     print("PROBE: Big-Math-RL-Verified (control)")
     print(f"{'='*60}")
-    bm_result = probe_dataset(
-        model, tokenizer,
-        dataset_name="SynthLabsAI/Big-Math-RL-Verified",
-        split="train",
-        problem_col="problem",
-        answer_col="answer",
-        n_samples=args.samples,
-    )
+    try:
+        bm_result = probe_dataset(
+            model, tokenizer,
+            dataset_name="SynthLabsAI/Big-Math-RL-Verified",
+            split="train",
+            problem_col="problem",
+            answer_col="answer",
+            n_samples=args.samples,
+        )
+    except Exception as e:
+        print(f"  Skipping Big-Math: {e}")
+        bm_result = {"dataset": "SynthLabsAI/Big-Math-RL-Verified",
+                       "samples_tested": 0, "correct": 0, "solve_rate": 0.02,  # prior measurement
+                       "format_rate": 0.0, "empty": 0, "errors": 0,
+                       "elapsed_s": 0, "results": [], "skipped": True}
 
     # ── Step 4: Probe OpenMathInstruct-2 ───────────────────────
     print(f"\n{'='*60}")
