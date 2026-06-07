@@ -202,6 +202,7 @@ def main():
             print(f"[GRPO] Filtered dataset size: {len(dataset)}")
         else:
             print("[GRPO] Running all-zero filter (this is expensive, ~10-30 min)...")
+            sft_path = args.sft_checkpoint
             print(f"[GRPO] Loading SFT base model for filtering: {sft_path}")
             from transformers import AutoModelForCausalLM
             filter_model = AutoModelForCausalLM.from_pretrained(
