@@ -124,26 +124,24 @@ def scale_by_difficulty(rewards: list[float], prompts: list[str],
     gradient — scale reward UP. Low variance (all right or all wrong) provides
     no useful signal — leave unchanged.
 
-    This replaces the static λ_correct with dynamic, per-question values.
-
-    Args:
-        rewards: flat list of B·G rewards, grouped by prompt
-        prompts: list of B prompts (used for grouping)
-        group_size: G — number of completions per prompt
-        alpha: scaling coefficient (default 0.5 per §3.3)
-
-    Returns:
-        Scaled rewards, same length as input.
+    Handles partial batches where len(rewards) % group_size != 0 (last batch).
     """
     import numpy as np
     B = len(prompts)
-    scaled = list(rewards)  # copy
+    if B == 0 or len(rewards) == 0:
+        return rewards
+    # Use actual group size from the batch (may differ from config G on partial batch)
+    actual_g = len(rewards) // B if B > 0 else group_size
+    if actual_g < 2:
+        return rewards  # Need at least 2 completions per prompt for variance
+    scaled = list(rewards)
     for i in range(B):
-        start = i * group_size
-        end = start + group_size
-        group_rewards = rewards[start:end]
-        var = float(np.var(group_rewards)) if len(group_rewards) > 1 else 0.0
-        # Scale: λ_correct(q) = 1 + α · Var({R(q, o_i)})
+        start = i * actual_g
+        end = min(start + actual_g, len(rewards))
+        group_rewards = scaled[start:end]
+        if len(group_rewards) < 2:
+            continue
+        var = float(np.var(group_rewards))
         difficulty_weight = 1.0 + alpha * var
         for j in range(start, end):
             scaled[j] *= difficulty_weight
