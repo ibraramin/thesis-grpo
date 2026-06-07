@@ -7,6 +7,7 @@ Supports three dataset stages as defined in the methodology:
   3. All-zero filtering: excludes samples the SFT model cannot solve
 """
 
+import os
 import re
 from datasets import load_dataset, Dataset
 
@@ -88,6 +89,11 @@ def load_grpo_dataset(config: dict, max_samples: int = 2500) -> Dataset:
 
     Returns a Dataset with 'prompt' and 'answer' columns.
     """
+    # Check for offline-filtered dataset first
+    filtered_path = config.get("filter_offline", {}).get("output", "outputs/filtered_grpo/filtered_dataset.jsonl")
+    if os.path.exists(filtered_path):
+        return load_filtered_grpo_dataset(filtered_path, max_samples)
+
     ds = load_dataset(
         config["training"]["grpo"]["dataset"],
         split="train",
@@ -107,6 +113,25 @@ def load_grpo_dataset(config: dict, max_samples: int = 2500) -> Dataset:
         prompt = format_grpo_prompt(problem)
         samples.append({"prompt": prompt, "answer": answer})
 
+    return Dataset.from_list(samples)
+
+
+def load_filtered_grpo_dataset(path: str, max_samples: int = 2500) -> Dataset:
+    """
+    Load a pre-filtered dataset from a JSONL file produced by filter_offline.py.
+
+    Each line: {"prompt": "...", "answer": "..."}
+    """
+    import json
+    import os
+    samples = []
+    with open(path) as f:
+        for i, line in enumerate(f):
+            if i >= max_samples:
+                break
+            entry = json.loads(line)
+            samples.append({"prompt": entry["prompt"], "answer": entry["answer"]})
+    print(f"[GRPO] Loaded {len(samples)} pre-filtered samples from {path}")
     return Dataset.from_list(samples)
 
 

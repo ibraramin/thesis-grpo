@@ -47,6 +47,16 @@ training:
       max_completion_length: 1024
       batch_size: 4
 
+  # ── Offline Dataset Filter (§3.1) ─────────────────────────────
+  # Runs vLLM inference once against 30K prompts to find
+  # "solvable" problems for GRPO training. Prevents format-reward
+  # hacking when the model cannot solve a problem at all.
+  filter_offline:
+    input_prompts: 30000       # probes per run
+    g: 4                       # generations per prompt
+    max_completion: 512
+    output: "outputs/filtered_grpo/filtered_dataset.jsonl"
+
   stabilization:
     pspo_enabled: true
     pspo_delta: 0.1           # smoothing coefficient δ
