@@ -122,9 +122,9 @@ def filter_non_all_zero(grpo_dataset: Dataset, sft_model, tokenizer,
     import torch
     from tqdm import tqdm
 
-    model.eval()
+    sft_model.eval()
     keep_indices = []
-    device = next(model.parameters()).device
+    device = next(sft_model.parameters()).device
 
     samples = [grpo_dataset[i] for i in range(len(grpo_dataset))]
 
@@ -138,7 +138,7 @@ def filter_non_all_zero(grpo_dataset: Dataset, sft_model, tokenizer,
 
         # Generate G completions per prompt
         with torch.no_grad():
-            outputs = model.generate(
+            outputs = sft_model.generate(
                 **inputs,
                 max_new_tokens=max_completion,
                 do_sample=True,
