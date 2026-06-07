@@ -32,7 +32,7 @@ def inspect_dataset(name: str, split: str = "train", n_rows: int = 5):
     print(f"INSPECT: {name}")
     print(f"{'='*60}")
     try:
-        ds = load_dataset(name, split=split, streaming=True)
+        ds = load_dataset(name, split=split, streaming=True, token=True)
         row = next(iter(ds))
         print(f"\n  Columns: {list(row.keys())}")
         print(f"\n  --- First {n_rows} rows ---")
@@ -56,6 +56,11 @@ def load_model(tokenizer_name: str, ckpt_path: str):
     """Load SFT model + tokenizer. Fall back to base if no checkpoint."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
+
+    # Respect HF_ENDPOINT for China mirror (hf-mirror.com)
+    hf_endpoint = os.environ.get("HF_ENDPOINT", "")
+    if hf_endpoint:
+        print(f"  Using HF endpoint: {hf_endpoint}")
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
