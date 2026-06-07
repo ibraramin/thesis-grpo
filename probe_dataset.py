@@ -227,6 +227,10 @@ def probe_dataset(
 
         total += 1
 
+        if total % 10 == 0 or total == 1:
+            print(f"  [{total}/{n_samples}] acc={correct/total:.1%} fmt={format_ok/total:.1%}  "
+                  f"({time.time()-t0:.0f}s)", flush=True)
+
         has_tags = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
                    bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
         if has_tags:
