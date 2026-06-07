@@ -1,11 +1,9 @@
 """
 evaluate.py — Benchmark evaluation on MATH-500 and AIME24 (§6).
 
-Evaluates all trained checkpoints by:
-  1. Loading the merged model for each cohort/seed
-  2. Generating completions with greedy decoding
-  3. Parsing <answer> tags and comparing against ground truth
-  4. Computing Pass@1 accuracy
+Evaluates all trained checkpoints.
+Uses local JSONL copies (data/math500_eval.jsonl, data/aime24_eval.jsonl)
+for offline deployment. Falls back to HuggingFace streaming.
 
 Outputs: outputs/results.csv with per-cohort, per-seed metrics.
 """
@@ -13,6 +11,7 @@ Outputs: outputs/results.csv with per-cohort, per-seed metrics.
 import argparse
 import yaml
 import os
+import json
 import re
 import csv
 import torch
@@ -21,6 +20,10 @@ from tqdm import tqdm
 
 from data import format_grpo_prompt, get_tokenizer
 from rewards import _extract_answer
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+MATH500_LOCAL = os.path.join(DATA_DIR, "math500_eval.jsonl")
+AIME24_LOCAL = os.path.join(DATA_DIR, "aime24_eval.jsonl")
 
 
 BENCHMARKS = {
@@ -37,6 +40,46 @@ BENCHMARKS = {
         "answer_col": "solution",  # AIME24 stores answer in solution field
     },
 }
+
+
+def _load_local_jsonl(path: str, max_samples: int | None = None) -> list[dict]:
+    """Load a local JSONL dataset. Returns list of dicts with 'problem' and 'answer'."""
+    if not os.path.exists(path):
+        return []
+    rows = []
+    with open(path) as f:
+        for i, line in enumerate(f):
+            if max_samples is not None and i >= max_samples:
+                break
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def _load_benchmark_rows(bench_name: str, max_samples: int | None = None):
+    """Load benchmark data — local JSONL first, HF streaming fallback."""
+    local_paths = {
+        "math500": MATH500_LOCAL,
+        "aime24": AIME24_LOCAL,
+    }
+    b = BENCHMARKS[bench_name]
+    local_path = local_paths.get(bench_name)
+    if local_path and os.path.exists(local_path):
+        rows = _load_local_jsonl(local_path, max_samples)
+        if rows:
+            print(f"    Loaded {len(rows)} samples from local: {local_path}")
+            return rows, b
+
+    print(f"    Loading from HF: {b['dataset']}")
+    ds = load_dataset(b["dataset"], split=b["split"], streaming=True, token=True)
+    rows = []
+    for i, row in enumerate(ds):
+        if max_samples is not None and i >= max_samples:
+            break
+        rows.append(row)
+    return rows, b
 
 
 def parse_args():
@@ -152,18 +195,16 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
         b = BENCHMARKS[bench_name]
         print(f"  Benchmark: {bench_name} ({b['dataset']})")
 
-        ds = load_dataset(b["dataset"], split=b["split"], streaming=True, token=True)
+        rows, b_info = _load_benchmark_rows(bench_name, max_samples)
+
         correct = 0
         total = 0
         format_ok = 0
         total_length = 0
 
-        for i, row in enumerate(ds):
-            if max_samples and i >= max_samples:
-                break
-
-            problem = row[b["problem_col"]]
-            ground_truth = row[b["answer_col"]]
+        for i, row in enumerate(rows):
+            problem = row[b_info["problem_col"]]
+            ground_truth = row[b_info["answer_col"]]
 
             prompt = format_grpo_prompt(problem)
             inputs = tokenizer(prompt, return_tensors="pt",

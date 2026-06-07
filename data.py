@@ -3,13 +3,22 @@ data.py — Dataset loading, preprocessing, and tokenization pipeline.
 
 Supports three dataset stages as defined in the methodology:
   1. Acquisition Set (SFT): open-r1/OpenR1-Math-220k
-  2. Consolidation Set (GRPO): SynthLabsAI/Big-Math-RL-Verified
+  2. Consolidation Set (GRPO): nvidia/OpenMathInstruct-2 (or Big-Math-RL-Verified)
   3. All-zero filtering: excludes samples the SFT model cannot solve
+
+All loaders prefer local JSONL/JSONL.GZ files from data/ over HuggingFace
+streaming, enabling fully offline (air-gapped) deployment.
 """
 
+import json
+import gzip
 import os
 import re
 from datasets import load_dataset, Dataset
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+SFT_LOCAL = os.path.join(DATA_DIR, "openr1_math_220k_sft.jsonl.gz")
+GRPO_LOCAL = os.path.join(DATA_DIR, "openmath_instruct_2_grpo.jsonl")
 
 # ── Chat template for Qwen2.5 ──────────────────────────────────
 QWEN_CHAT_TEMPLATE = """\
@@ -45,9 +54,29 @@ def load_sft_dataset(config: dict, max_samples: int = 5000) -> Dataset:
     """
     Load and preprocess the OpenR1-Math-220k dataset for SFT.
 
-    Uses the 'default' config which contains full traces with <think> tags.
+    Prefers the local gzipped JSONL file (data/openr1_math_220k_sft.jsonl.gz)
+    for offline deployment. Falls back to HuggingFace streaming.
+
     Returns a Dataset with a 'text' column suitable for SFTTrainer.
     """
+    # ── Try local gzip copy first ────────────────────────────────
+    if os.path.exists(SFT_LOCAL):
+        samples = []
+        with gzip.open(SFT_LOCAL, "rt", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if i >= max_samples:
+                    break
+                row = json.loads(line)
+                problem = row.get("problem", "")
+                completion = row.get("completion", "")
+                if not problem or not completion:
+                    continue
+                text = format_sft_chat(problem, completion)
+                samples.append({"text": text})
+        print(f"[SFT] Loaded {len(samples)} samples from local: {SFT_LOCAL}")
+        return Dataset.from_list(samples)
+
+    # ── HuggingFace fallback ─────────────────────────────────────
     ds = load_dataset(
         config["training"]["sft"]["dataset"],
         "default",
@@ -60,14 +89,12 @@ def load_sft_dataset(config: dict, max_samples: int = 5000) -> Dataset:
         if i >= max_samples:
             break
 
-        # Use the first generation that passed math_verify as the target
         generation = None
         if row.get("generations") and row.get("correctness_math_verify"):
             for gen, correct in zip(row["generations"], row["correctness_math_verify"]):
                 if correct:
                     generation = gen
                     break
-        # Fallback: use first generation regardless
         if generation is None and row.get("generations"):
             generation = row["generations"][0]
 
@@ -85,15 +112,39 @@ def load_sft_dataset(config: dict, max_samples: int = 5000) -> Dataset:
 
 def load_grpo_dataset(config: dict, max_samples: int = 2500) -> Dataset:
     """
-    Load and preprocess the Big-Math-RL-Verified dataset for GRPO.
+    Load and preprocess the GRPO dataset for GRPO training.
+
+    Priority order:
+      1. Offline-filtered JSONL (filter_offline.py output)
+      2. Local OpenMathInstruct-2 copy (data/openmath_instruct_2_grpo.jsonl)
+      3. HuggingFace streaming (gated Big-Math or OpenMathInstruct-2)
 
     Returns a Dataset with 'prompt' and 'answer' columns.
     """
-    # Check for offline-filtered dataset first
-    filtered_path = config.get("filter_offline", {}).get("output", "outputs/filtered_grpo/filtered_dataset.jsonl")
+    # 1. Offline-filtered dataset
+    filtered_path = config.get("filter_offline", {}).get("output",
+                       "outputs/filtered_grpo/filtered_dataset.jsonl")
     if os.path.exists(filtered_path):
         return load_filtered_grpo_dataset(filtered_path, max_samples)
 
+    # 2. Local OpenMathInstruct-2 copy
+    if os.path.exists(GRPO_LOCAL):
+        samples = []
+        with open(GRPO_LOCAL) as f:
+            for i, line in enumerate(f):
+                if i >= max_samples:
+                    break
+                row = json.loads(line)
+                problem = row.get("problem", "")
+                answer = row.get("answer", "")
+                if not problem or not answer:
+                    continue
+                prompt = format_grpo_prompt(problem)
+                samples.append({"prompt": prompt, "answer": answer})
+        print(f"[GRPO] Loaded {len(samples)} samples from local: {GRPO_LOCAL}")
+        return Dataset.from_list(samples)
+
+    # 3. HuggingFace fallback
     ds = load_dataset(
         config["training"]["grpo"]["dataset"],
         split="train",
