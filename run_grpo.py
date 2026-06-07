@@ -216,13 +216,20 @@ def main():
 
     print(f"[GRPO] Loading SFT checkpoint: {sft_path}")
 
+    USE_UNSLOTH = False
     try:
         from unsloth import FastLanguageModel
+        FastLanguageModel.from_pretrained  # trigger lazy import
+        USE_UNSLOTH = True
+    except Exception:
+        print("[GRPO] Unsloth unavailable/incompatible — using standard transformers + bitsandbytes")
+
+    if USE_UNSLOTH:
         model, _ = FastLanguageModel.from_pretrained(
             model_name=sft_path,
             max_seq_length=grpo_cfg["max_prompt_length"] + grpo_cfg["max_completion_length"],
-            load_in_4bit=False,  # SFT checkpoint is already 16-bit merged
-            fast_inference=True,  # vLLM handles the inference-side separately
+            load_in_4bit=False,
+            fast_inference=True,
         )
         if grpo_cfg.get("apply_lora", True):
             model = FastLanguageModel.get_peft_model(
@@ -235,9 +242,7 @@ def main():
                 use_gradient_checkpointing="unsloth",
                 random_state=args.seed,
             )
-            model.print_trainable_parameters()
-    except ImportError:
-        print("[GRPO] Unsloth not available, using standard transformers + bitsandbytes")
+    else:
         from transformers import AutoModelForCausalLM, BitsAndBytesConfig
         from peft import LoraConfig, get_peft_model
 
@@ -261,7 +266,8 @@ def main():
             task_type="CAUSAL_LM",
         )
         model = get_peft_model(model, peft_config)
-        model.print_trainable_parameters()
+
+    model.print_trainable_parameters()
 
     # ── GRPO Configuration (§3.2, §7.3) ────────────────────────
     from trl import GRPOConfig

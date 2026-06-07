@@ -121,8 +121,8 @@ def main():
     print("[SFT] Tokenizing...")
     dataset = tokenize_sft(dataset, tokenizer, max_seq_length=sft_cfg["max_seq_length"])
 
-    # ── Model Loading (requires Unsloth) ────────────────────────
-    print(f"[SFT] Loading model: {model_cfg['name']} (4-bit NF4)")
+    # ── Model Loading ───────────────────────────────────────────
+    print(f"[SFT] Loading model: {model_cfg['name']} (4-bit)")
 
     if torch.cuda.is_available():
         print(f"[SFT] GPU: {torch.cuda.get_device_name(0)} "
@@ -130,18 +130,7 @@ def main():
     else:
         print("[SFT] WARNING: No GPU detected. Training will be extremely slow.")
 
-    try:
-        from unsloth import FastLanguageModel
-    except ImportError:
-        print("[SFT] ERROR: unsloth not installed. Install with: pip install unsloth")
-        print("[SFT] On the Docker image (Dockerfile) this is pre-installed.")
-        if test_run:
-            with open(report_path, "a") as rf:
-                rf.write("✗ SFT FAILED: unsloth not installed\n")
-        sys.exit(1)
-
     # In test-run mode, skip actual model loading if too slow:
-    # just validate the pipeline with dry-run
     if test_run and not torch.cuda.is_available():
         print("[SFT] Test-run on CPU: skipping model load (format validation only)")
         with open(report_path, "a") as rf:
@@ -149,24 +138,59 @@ def main():
             rf.write("  ✓ SFT pipeline validated (config + data + tokenization)\n\n")
         return
 
-    model, _ = FastLanguageModel.from_pretrained(
-        model_name=model_cfg["name"],
-        max_seq_length=sft_cfg["max_seq_length"],
-        load_in_4bit=model_cfg["load_in_4bit"],
-        fast_inference=False,  # Training mode
-    )
+    # Try Unsloth first (2x faster, 4-bit NF4), fall back to standard transformers
+    USE_UNSLOTH = False
+    try:
+        from unsloth import FastLanguageModel
+        FastLanguageModel.from_pretrained  # trigger import to detect incompatibility
+        USE_UNSLOTH = True
+    except Exception:
+        print("[SFT] Unsloth unavailable/incompatible — using standard transformers + bitsandbytes")
 
-    # Apply LoRA adapters (§3.2)
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=model_cfg["lora_r"],
-        target_modules=model_cfg["lora_targets"],
-        lora_alpha=model_cfg["lora_alpha"],
-        lora_dropout=0.0,
-        bias="none",
-        use_gradient_checkpointing="unsloth",  # Unsloth's optimized GCO
-        random_state=42,
-    )
+    if USE_UNSLOTH:
+        model, _ = FastLanguageModel.from_pretrained(
+            model_name=model_cfg["name"],
+            max_seq_length=sft_cfg["max_seq_length"],
+            load_in_4bit=model_cfg["load_in_4bit"],
+            fast_inference=False,
+        )
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=model_cfg["lora_r"],
+            target_modules=model_cfg["lora_targets"],
+            lora_alpha=model_cfg["lora_alpha"],
+            lora_dropout=0.0,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=42,
+        )
+    else:
+        from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=model_cfg["load_in_4bit"],
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_cfg["name"],
+            quantization_config=bnb_config if model_cfg["load_in_4bit"] else None,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+        )
+        if model_cfg["load_in_4bit"]:
+            model = prepare_model_for_kbit_training(model)
+        peft_config = LoraConfig(
+            r=model_cfg["lora_r"],
+            lora_alpha=model_cfg["lora_alpha"],
+            target_modules=model_cfg["lora_targets"],
+            lora_dropout=0.0,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, peft_config)
+
     model.print_trainable_parameters()
 
     # ── SFT Trainer (§7.2) ─────────────────────────────────────
