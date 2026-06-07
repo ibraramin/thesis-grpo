@@ -216,9 +216,13 @@ def main():
                 max_completion=grpo_cfg["max_completion_length"],
             )
             print(f"[GRPO] Filtered dataset size: {len(dataset)} (removed all-zero trajectories)")
-            os.makedirs(FILTERED_DATASET_DIR, exist_ok=True)
-            dataset.save_to_disk(filtered_path)
-            print(f"[GRPO] Saved filtered dataset to {filtered_path}")
+            if len(dataset) == 0:
+                print("[GRPO] WARNING: Filter left 0 samples — falling back to unfiltered dataset")
+                dataset = load_grpo_dataset(cfg, max_samples=grpo_cfg["max_samples"])
+            else:
+                os.makedirs(FILTERED_DATASET_DIR, exist_ok=True)
+                dataset.save_to_disk(filtered_path)
+                print(f"[GRPO] Saved filtered dataset to {filtered_path}")
             del filter_model
             torch.cuda.empty_cache()
     elif os.path.exists(os.path.join(FILTERED_DATASET_DIR, "filtered_dataset")):
@@ -227,6 +231,10 @@ def main():
         print(f"[GRPO] Using cached filtered dataset from {FILTERED_DATASET_DIR}")
         dataset = load_from_disk(os.path.join(FILTERED_DATASET_DIR, "filtered_dataset"))
         print(f"[GRPO] Filtered dataset size: {len(dataset)}")
+        if len(dataset) == 0:
+            print("[GRPO] WARNING: Cached filtered dataset is empty — falling back to unfiltered")
+            dataset = load_grpo_dataset(cfg, max_samples=grpo_cfg["max_samples"])
+            print(f"[GRPO] Dataset size: {len(dataset)}")
 
     dataset = tokenize_grpo(dataset, tokenizer, max_prompt_length=grpo_cfg["max_prompt_length"])
     print("[GRPO] Dataset tokenized")
@@ -333,7 +341,6 @@ def main():
         save_steps=50,
         bf16=torch.cuda.is_bf16_supported(),
         optim="adamw_8bit",
-        max_prompt_length=grpo_cfg["max_prompt_length"],
         max_completion_length=grpo_cfg["max_completion_length"],
         num_generations=grpo_cfg["num_generations"],
         beta=grpo_cfg["beta"],
