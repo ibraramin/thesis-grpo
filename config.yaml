@@ -29,11 +29,11 @@ training:
 
   grpo:
     dataset: "SynthLabsAI/Big-Math-RL-Verified"
-    max_samples: 2500
+    max_samples: 500
     epochs: 2
     learning_rate: 5.0e-6
     warmup_ratio: 0.1
-    num_generations: 16       # G — group size
+    num_generations: 8        # G — group size (reduced from 16 for 3090 speed)
     max_prompt_length: 256
     max_completion_length: 1792
     gradient_accumulation_steps: 16  # effective batch: 16 prompts × 16 completions = 256
