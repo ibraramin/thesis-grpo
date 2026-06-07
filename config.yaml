@@ -38,6 +38,8 @@ training:
     max_completion_length: 1792
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
+    difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)
+    difficulty_alpha: 0.5     # difficulty sensitivity coefficient
 
   stabilization:
     pspo_enabled: true

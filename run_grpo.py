@@ -164,7 +164,13 @@ def main():
         print(f"[GRPO] Dynamic gater: γ={gamma}")
 
     # ── Reward function ────────────────────────────────────────
-    reward_fn = make_combined_reward_fn(cohort, gater)
+    reward_fn = make_combined_reward_fn(
+        cohort,
+        gater,
+        difficulty_scale=grpo_cfg.get("difficulty_scale", False),
+        num_generations=grpo_cfg["num_generations"],
+        difficulty_alpha=grpo_cfg.get("difficulty_alpha", 0.5),
+    )
     print("[GRPO] Reward function built")
 
     # ── Tokenizer ──────────────────────────────────────────────

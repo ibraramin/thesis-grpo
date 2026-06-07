@@ -110,6 +110,46 @@ def graduated_correctness_reward(prompts: list[str], completions: list[str],
     return rewards
 
 
+# ── Dynamic Difficulty Scalarization (§3.3) ───────────────────
+
+def scale_by_difficulty(rewards: list[float], prompts: list[str],
+                        group_size: int, alpha: float = 0.5) -> list[float]:
+    """
+    Per-question λ_correct scaling based on reward-gap variance (§3.3, DW-GRPO).
+
+    λ_correct(q) = 1 + α · Var({R(q, o_i)}_i=1^G)
+
+    Where Var is the variance of rewards across the G completions for each
+    prompt. High variance (mixed right/wrong) indicates a valuable difficulty
+    gradient — scale reward UP. Low variance (all right or all wrong) provides
+    no useful signal — leave unchanged.
+
+    This replaces the static λ_correct with dynamic, per-question values.
+
+    Args:
+        rewards: flat list of B·G rewards, grouped by prompt
+        prompts: list of B prompts (used for grouping)
+        group_size: G — number of completions per prompt
+        alpha: scaling coefficient (default 0.5 per §3.3)
+
+    Returns:
+        Scaled rewards, same length as input.
+    """
+    import numpy as np
+    B = len(prompts)
+    scaled = list(rewards)  # copy
+    for i in range(B):
+        start = i * group_size
+        end = start + group_size
+        group_rewards = rewards[start:end]
+        var = float(np.var(group_rewards)) if len(group_rewards) > 1 else 0.0
+        # Scale: λ_correct(q) = 1 + α · Var({R(q, o_i)})
+        difficulty_weight = 1.0 + alpha * var
+        for j in range(start, end):
+            scaled[j] *= difficulty_weight
+    return scaled
+
+
 # ── Dynamic Reward Gating (Cohort D, DW-GRPO, §3.3) ───────────
 
 class DynamicRewardGater:
@@ -188,7 +228,9 @@ def make_cohort_reward_fns(cohort_cfg: dict, gater: DynamicRewardGater | None = 
 
 # ── TRL Integration ────────────────────────────────────────────
 
-def make_combined_reward_fn(cohort_cfg: dict, gater: DynamicRewardGater | None = None):
+def make_combined_reward_fn(cohort_cfg: dict, gater: DynamicRewardGater | None = None,
+                            difficulty_scale: bool = False, num_generations: int = 16,
+                            difficulty_alpha: float = 0.5):
     """
     Build a single combined reward function for TRL's GRPOTrainer.
 
@@ -197,6 +239,9 @@ def make_combined_reward_fn(cohort_cfg: dict, gater: DynamicRewardGater | None =
     computes the total reward per completion.
 
     R_total(q, o_i) = λ_correct * r_correct + λ_format * r_format
+
+    When difficulty_scale=True, applies Dynamic Difficulty Scalarization (§3.3):
+      λ_correct(q) = 1 + α · Var({R(q, o_i)}_i=1^G)
     """
     l_correct = cohort_cfg.get("correctness", 1.0)
     l_format = cohort_cfg.get("format", 0.0)
@@ -246,6 +291,10 @@ def make_combined_reward_fn(cohort_cfg: dict, gater: DynamicRewardGater | None =
                 total += w * (1.0 if _has_tags(completion) else 0.0)
 
             rewards.append(total)
+
+        # ── Dynamic Difficulty Scalarization (§3.3) ──────────
+        if difficulty_scale:
+            rewards = scale_by_difficulty(rewards, prompts, num_generations, difficulty_alpha)
 
         return rewards
 

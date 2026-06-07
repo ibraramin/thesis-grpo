@@ -1,0 +1,87 @@
+cohorts:
+  A:
+    correctness: 0.5
+    dynamic: false
+    format: 1.5
+    graduated: false
+  B:
+    correctness: 1.5
+    dynamic: false
+    format: 0.2
+    graduated: false
+  C:
+    correctness: 1.0
+    dynamic: false
+    format: 0.2
+    graduated: true
+  D:
+    correctness: 1.0
+    dynamic: true
+    format: 1.0
+    gamma: 0.01
+    graduated: false
+  baseline:
+    correctness: 1.0
+    dynamic: false
+    format: 0.0
+    graduated: false
+evaluation:
+  benchmarks:
+  - math500
+  - aime24
+  max_new_tokens: 512
+  num_seeds: 1
+  temperature: 0.0
+model:
+  load_in_4bit: true
+  lora_alpha: 128
+  lora_r: 64
+  lora_targets:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+  name: Qwen/Qwen2.5-1.5B
+test_run:
+  batch_size: 1
+  epochs: 1
+  eval_max_samples: 3
+  gradient_accumulation_steps: 1
+  grpo_max_samples: 10
+  max_completion_length: 128
+  max_new_tokens: 64
+  num_generations: 4
+  num_seeds: 1
+  output_dir: outputs/test_run
+  report_file: outputs/test_run/report.txt
+  sft_max_samples: 10
+training:
+  grpo:
+    beta: 0.04
+    dataset: SynthLabsAI/Big-Math-RL-Verified
+    epochs: 2
+    epsilon: 0.2
+    learning_rate: 5.0e-06
+    max_completion_length: 128
+    max_prompt_length: 256
+    max_samples: 10
+    num_generations: 4
+    warmup_ratio: 0.1
+  sft:
+    batch_size: 4
+    dataset: open-r1/OpenR1-Math-220k
+    epochs: 1
+    gradient_accumulation_steps: 4
+    learning_rate: 5.0e-06
+    max_samples: 10
+    max_seq_length: 2048
+    warmup_ratio: 0.1
+  stabilization:
+    entropy_filter_enabled: true
+    entropy_threshold: 0.693
+    kl_estimator: k3
+    pspo_delta: 0.1
+    pspo_enabled: true
