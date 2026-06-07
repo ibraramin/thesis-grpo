@@ -14,6 +14,8 @@ import os
 import time
 import torch
 
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Probe dataset solve rates")
     parser.add_argument("--sft-checkpoint", default="outputs/sft_checkpoint",
@@ -36,7 +38,7 @@ def inspect_dataset(name: str, split: str = "train", n_rows: int = 5):
     print(f"INSPECT: {name}")
     print(f"{'='*60}")
     try:
-        ds = load_dataset(name, split=split, streaming=True, token=True)
+        ds = load_dataset(name, split=split, streaming=True, token=False)
         row = next(iter(ds))
         print(f"\n  Columns: {list(row.keys())}")
         print(f"\n  --- First {n_rows} rows ---")
@@ -160,13 +162,29 @@ def probe_dataset(
 ) -> dict:
     """Single greedy-generation probe: T=0, check correctness via _check_answer.
 
-    Always pulls from HuggingFace streaming (no local JSONL)."""
+    Uses local JSONL from data/ when available, otherwise HF streaming."""
     from datasets import load_dataset
     from data import _check_answer
     import re
 
-    print(f"\n  Probing {n_samples} prompts from {dataset_name}...")
-    ds = load_dataset(dataset_name, split=split, streaming=True, token=True)
+    # Local JSONL shortcuts (same files committed to repo)
+    LOCAL_MAP = {
+        "nvidia/OpenMathInstruct-2": os.path.join(DATA_DIR, "openmath_instruct_2_probe.jsonl"),
+    }
+    local_file = LOCAL_MAP.get(dataset_name)
+    if local_file and os.path.exists(local_file):
+        print(f"\n  Loading from local file: {local_file} ({n_samples} samples)")
+        rows = []
+        with open(local_file) as f:
+            for line in f:
+                rows.append(json.loads(line))
+                if len(rows) >= n_samples:
+                    break
+        ds = rows
+    else:
+        print(f"\n  Probing {n_samples} prompts from {dataset_name}...")
+        token = os.environ.get("HF_TOKEN") or True
+        ds = load_dataset(dataset_name, split=split, streaming=True, token=token)
     total = 0
     correct = 0
     format_ok = 0
