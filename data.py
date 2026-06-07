@@ -185,6 +185,7 @@ def get_tokenizer(model_name: str):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"       # required for decoder-only generation
     return tokenizer
 
 
