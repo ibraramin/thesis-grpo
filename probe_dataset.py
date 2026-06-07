@@ -157,28 +157,16 @@ def probe_dataset(
     model, tokenizer, dataset_name: str, split: str,
     problem_col: str, answer_col: str, n_samples: int,
     max_completion: int = 512,
-    local_path: str | None = None,
 ) -> dict:
-    """Single greedy-generation probe: T=0, check correctness via _check_answer."""
+    """Single greedy-generation probe: T=0, check correctness via _check_answer.
+
+    Always pulls from HuggingFace streaming (no local JSONL)."""
     from datasets import load_dataset
     from data import _check_answer
     import re
 
-    if local_path and os.path.exists(local_path):
-        print(f"\n  Loading from local file: {local_path}")
-        import json
-        rows = []
-        with open(local_path) as f:
-            for line in f:
-                rows.append(json.loads(line))
-                if len(rows) >= n_samples:
-                    break
-        ds = rows  # list of dicts
-        is_iterable = False
-    else:
-        print(f"\n  Probing {n_samples} prompts from {dataset_name}...")
-        ds = load_dataset(dataset_name, split=split, streaming=True, token=True)
-        is_iterable = True
+    print(f"\n  Probing {n_samples} prompts from {dataset_name}...")
+    ds = load_dataset(dataset_name, split=split, streaming=True, token=True)
     total = 0
     correct = 0
     format_ok = 0
@@ -190,9 +178,6 @@ def probe_dataset(
     for i, row in enumerate(ds):
         if total >= n_samples:
             break
-
-        if not is_iterable:
-            row = ds[total]  # local JSONL: index-based access
 
         problem = row.get(problem_col, "")
         ground_truth = row.get(answer_col, "")
@@ -327,7 +312,6 @@ def main():
         problem_col="problem",
         answer_col="expected_answer",
         n_samples=args.samples,
-        local_path=args.dataset_path or "data/openmath_instruct_2_probe.jsonl",
     )
 
     # ── Step 5: Report ──────────────────────────────────────────
