@@ -18,6 +18,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Probe dataset solve rates")
     parser.add_argument("--sft-checkpoint", default="outputs/sft_checkpoint",
                         help="Path to merged SFT checkpoint")
+    parser.add_argument("--model-path", default=None,
+                        help="Explicit local path to model (bypasses cache lookup)")
     parser.add_argument("--samples", type=int, default=500,
                         help="Number of prompts to test per dataset")
     parser.add_argument("--output", default="outputs/probe_results.json")
@@ -64,38 +66,65 @@ def _find_model_path(repo_id: str) -> str | None:
         info = try_to_load_from_cache(cid, "config.json")
         if info:
             return cid
+    # Last resort: scan cache directory for model files
+    import glob
+    cache_root = os.path.expanduser("~/.cache/huggingface/hub")
+    model_glob = f"models--*{parts[1]}*"
+    matches = glob.glob(os.path.join(cache_root, model_glob))
+    if matches:
+        # Extract repo_id from dir name: models--org--Name -> org/Name
+        for m in matches:
+            dirname = os.path.basename(m)
+            if dirname.startswith("models--"):
+                inner = dirname[len("models--"):].replace("--", "/")
+                if try_to_load_from_cache(inner, "config.json"):
+                    return inner
     return None
 
 
-def load_model(tokenizer_name: str, ckpt_path: str):
-    """Load SFT model + tokenizer. Fall back to base if no checkpoint."""
+def load_model(tokenizer_name: str, ckpt_path: str, model_path: str | None = None):
+    """Load SFT model + tokenizer. Uses explicit path, local cache, or remote fallback."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
 
-    # Check local cache first (handles ModelScope + HF offline scenarios)
-    local_id = _find_model_path(tokenizer_name)
-    if local_id:
-        print(f"  Found cached model: {local_id}")
-        tokenizer = AutoTokenizer.from_pretrained(
-            local_id, local_files_only=True, trust_remote_code=True
-        )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    if model_path:
+        # Explicit local path (e.g. ModelScope download)
+        print(f"  Loading model from explicit path: {model_path}")
+        tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
-            local_id,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
+            model_path,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None,
             local_files_only=True,
             trust_remote_code=True,
         )
     else:
-        hf_endpoint = os.environ.get("HF_ENDPOINT", "")
-        print(f"  Model not cached locally — downloading{f' via {hf_endpoint}' if hf_endpoint else ''}...")
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            tokenizer_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-            trust_remote_code=True,
-        )
+        # Check local cache first (handles ModelScope + HF offline scenarios)
+        local_id = _find_model_path(tokenizer_name)
+        if local_id:
+            print(f"  Found cached model: {local_id}")
+            tokenizer = AutoTokenizer.from_pretrained(
+                local_id, local_files_only=True, trust_remote_code=True
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                local_id,
+                torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+                device_map="auto" if device == "cuda" else None,
+                local_files_only=True,
+                trust_remote_code=True,
+            )
+        else:
+            hf_endpoint = os.environ.get("HF_ENDPOINT", "")
+            print(f"  Model not cached locally — downloading{f' via {hf_endpoint}' if hf_endpoint else ''}...")
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_pretrained(
+                tokenizer_name,
+                torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+                device_map="auto" if device == "cuda" else None,
+                trust_remote_code=True,
+            )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -244,7 +273,7 @@ def main():
     print(f"\n{'='*60}")
     print("LOADING MODEL")
     print(f"{'='*60}")
-    model, tokenizer = load_model("Qwen/Qwen2.5-1.5B", args.sft_checkpoint)
+    model, tokenizer = load_model("Qwen/Qwen2.5-1.5B", args.sft_checkpoint, args.model_path)
 
     # ── Step 3: Probe Big-Math-RL-Verified ─────────────────────
     print(f"\n{'='*60}")
