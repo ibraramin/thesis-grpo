@@ -192,7 +192,7 @@ def main():
             logging_steps=10,
             save_strategy="steps",
             save_steps=save_steps,
-            save_total_limit=3,            # Keep only last 3 checkpoints
+            save_total_limit=1,            # Keep only last checkpoint (32GB storage)
             fp16=not model_cfg["load_in_4bit"],
             bf16=torch.cuda.is_bf16_supported(),
             optim="adamw_8bit",
