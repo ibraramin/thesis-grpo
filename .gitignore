@@ -1,4 +1,8 @@
 outputs/
+filter_tune/
+diag/
+stuff/
+*.zip
 __pycache__/
 *.pyc
 .venv/
@@ -7,3 +11,5 @@ dist/
 build/
 .DS_Store
 *.log
+session*.md
+drive-download*

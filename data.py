@@ -202,7 +202,7 @@ def _check_answer(completion: str, ground_truth: str) -> bool:
     answers joined by \"or\".  Sympy is optional; falls back to string
     comparison when not available.
     """
-    match = re.search(r"<answer>(.*?)</answer>", completion, re.DOTALL)
+    match = re.search(r"<answer>(.*?)(?:</answer>|$)", completion, re.DOTALL)
     if not match:
         return False
 

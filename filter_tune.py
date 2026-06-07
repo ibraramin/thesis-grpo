@@ -75,7 +75,7 @@ def check_answer(completion: str, ground_truth: str) -> bool:
     answers joined by \"or\".  Sympy is optional; falls back to string
     comparison when not available.
     """
-    match = re.search(r"<answer>(.*?)</answer>", completion, re.DOTALL)
+    match = re.search(r"<answer>(.*?)(?:</answer>|$)", completion, re.DOTALL)
     if not match:
         return False
 
@@ -158,7 +158,7 @@ def main():
 
     # ── Format prompts with chat template ───────────────────────
     from data import format_grpo_prompt
-    prompts = [format_grpo_prompt(s["problem"]) for s in samples]
+    prompts = [format_grpo_prompt(s["problem"]) + "<think>\n" for s in samples]
     answers = [s["answer"] for s in samples]
 
     # ── Save questions and answers ──────────────────────────────
@@ -201,6 +201,7 @@ def main():
             max_tokens=args.max_completion,
             temperature=0.7 if g > 1 else 0.0,
             top_p=0.9,
+            stop=["<|im_end|>", "<|endoftext|>"],
         )
 
         # Generate all completions in one vLLM call
