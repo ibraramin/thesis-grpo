@@ -180,6 +180,21 @@ def _normalize_str(s: str) -> str:
     return s
 
 
+def _normalize_answer(raw: str) -> str:
+    """Normalize an answer string: strip LaTeX delimiters, normalize escapes."""
+    s = raw.strip()
+    s = re.sub(r"^\s*\\\(\s*", "", s)
+    s = re.sub(r"\s*\\\)\s*$", "", s)
+    s = re.sub(r"^\s*\\\[\s*", "", s)
+    s = re.sub(r"\s*\\\]\s*$", "", s)
+    s = re.sub(r"^\s*\$\$\s*", "", s)
+    s = re.sub(r"\s*\$\$\s*$", "", s)
+    s = re.sub(r"^\s*\$\s*", "", s)
+    s = re.sub(r"\s*\$\s*$", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _check_answer(completion: str, ground_truth: str) -> bool:
     """Check if a completion's <answer> tag matches the ground truth.
 
@@ -191,8 +206,8 @@ def _check_answer(completion: str, ground_truth: str) -> bool:
     if not match:
         return False
 
-    predicted = match.group(1).strip()
-    target = ground_truth.strip()
+    predicted = _normalize_answer(match.group(1))
+    target = _normalize_answer(ground_truth)
 
     # 1. Pure numeric comparison
     try:
@@ -229,7 +244,6 @@ def _check_answer(completion: str, ground_truth: str) -> bool:
         for alt in alternatives:
             alt = alt.strip()
             if _check_answer(f"<answer>{alt}</answer>", alt):
-                # One of the alternatives is parseable — check predicted matches it
                 if _check_answer(completion, alt):
                     return True
             elif _normalize_str(predicted) == _normalize_str(alt):
