@@ -226,8 +226,8 @@ def main():
             )
             dataset = filter_non_all_zero(
                 dataset, filter_model, tokenizer,
-                group_size=grpo_cfg["num_generations"],
-                max_completion=grpo_cfg["max_completion_length"],
+                group_size=4,              # Probe: 4 completions (not full G=16)
+                max_completion=512,        # Probe: 512 tokens (not full 1792)
             )
             print(f"[GRPO] Filtered dataset size: {len(dataset)} (removed all-zero trajectories)")
             if len(dataset) == 0:

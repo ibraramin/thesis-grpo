@@ -118,6 +118,9 @@ def filter_non_all_zero(grpo_dataset: Dataset, sft_model, tokenizer,
 
     NOTE: This is computationally expensive. Run once after SFT training.
     On the 3090 this is feasible; on smaller GPUs use a smaller probe set.
+
+    By default, uses a smaller probe (G=4, 512 tokens) vs full training (G=16, 1792)
+    to keep filtering practical. The probe only needs to find ONE correct answer.
     """
     import torch
     from tqdm import tqdm
