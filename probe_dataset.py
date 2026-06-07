@@ -280,6 +280,103 @@ def probe_dataset(
     }
 
 
+def probe_dataset_vllm(
+    merged_model_path: str, dataset_name: str, split: str,
+    problem_col: str, answer_col: str, n_samples: int,
+    max_completion: int = 256,
+) -> dict:
+    """vLLM-based probe: fast batch greedy generation (10-20x faster than HF)."""
+    from vllm import LLM, SamplingParams
+    from data import _check_answer
+    import re, json
+
+    print(f"\n  Loading vLLM model from {merged_model_path} ...")
+    llm = LLM(model=merged_model_path, trust_remote_code=True, gpu_memory_utilization=0.85)
+    sampling_params = SamplingParams(temperature=0, max_tokens=max_completion)
+
+    # Load data
+    local_file = os.path.join(DATA_DIR, "openmath_instruct_2_probe.jsonl")
+    if os.path.exists(local_file):
+        print(f"  Loading from local: {local_file}")
+        rows = []
+        with open(local_file) as f:
+            for i, line in enumerate(f):
+                if i >= n_samples:
+                    break
+                rows.append(json.loads(line))
+    else:
+        from datasets import load_dataset
+        token = os.environ.get("HF_TOKEN") or True
+        ds = load_dataset(dataset_name, split=split, streaming=True, token=token)
+        rows = []
+        for i, row in enumerate(ds):
+            if i >= n_samples:
+                break
+            rows.append(row)
+
+    prompts = []
+    answers = []
+    for row in rows:
+        p = row.get(problem_col, "")
+        a = row.get(answer_col, "")
+        if not p or not a:
+            continue
+        prompts.append(format_prompt(str(p)))
+        answers.append(str(a))
+
+    print(f"  Generating {len(prompts)} prompts via vLLM (max_tokens={max_completion}) ...")
+    t0 = time.time()
+    outputs = llm.generate(prompts, sampling_params)
+    elapsed = time.time() - t0
+    print(f"  Done in {elapsed:.0f}s ({len(prompts)/elapsed:.0f} samples/s)")
+
+    correct = 0
+    format_ok = 0
+    empty = 0
+    errors = 0
+    results = []
+
+    for i, (prompt, answer, output) in enumerate(zip(prompts, answers, outputs)):
+        completion = output.outputs[0].text
+
+        has_tags = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
+                   bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
+        if has_tags:
+            format_ok += 1
+
+        is_correct = _check_answer(completion, answer)
+
+        if not completion.strip():
+            empty += 1
+
+        if is_correct:
+            correct += 1
+
+        if i < 10 or i % 50 == 0:
+            results.append({
+                "problem": prompt[:150],
+                "ground_truth": answer[:80],
+                "completion": completion[:300],
+                "has_tags": has_tags,
+                "correct": is_correct,
+            })
+
+    total = len(prompts)
+    r = {
+        "dataset": dataset_name,
+        "samples_tested": total,
+        "correct": correct,
+        "solve_rate": correct / total if total > 0 else 0,
+        "format_rate": format_ok / total if total > 0 else 0,
+        "empty": empty,
+        "errors": errors,
+        "elapsed_s": elapsed,
+        "results": results[:10],
+    }
+    print(f"    solve_rate={r['solve_rate']:.1%}  format_rate={r['format_rate']:.1%}")
+    return r
+
+
 def main():
     args = parse_args()
 
@@ -293,31 +390,47 @@ def main():
     # ── Step 1: Inspect OpenMathInstruct-2 schema ───────────────
     cols_om2 = inspect_dataset("nvidia/OpenMathInstruct-2", "train", 5)
 
-    # ── Step 2: Load model ──────────────────────────────────────
-    print(f"\n{'='*60}")
-    print("LOADING MODEL")
-    print(f"{'='*60}")
-    model, tokenizer = load_model("Qwen/Qwen2.5-1.5B", args.sft_checkpoint, args.model_path)
+    # ── Try vLLM first (requires merged model) ──────────────────
+    merged_path = os.path.join(args.sft_checkpoint, "merged")
+    use_vllm = False
+    try:
+        from vllm import LLM
+        if os.path.isdir(merged_path) and os.path.exists(os.path.join(merged_path, "config.json")):
+            use_vllm = True
+    except ImportError:
+        pass
 
-    # ── OpenMathInstruct-2 ─────────────────────────────────────
-    print(f"\n{'='*60}")
-    print("PROBE: OpenMathInstruct-2")
-    print(f"{'='*60}")
+    if use_vllm:
+        print(f"\n{'='*60}")
+        print("PROBE (vLLM): OpenMathInstruct-2")
+        print(f"{'='*60}")
+        om2_result = probe_dataset_vllm(
+            merged_model_path=merged_path,
+            dataset_name="nvidia/OpenMathInstruct-2",
+            split="train",
+            problem_col="problem",
+            answer_col="expected_answer",
+            n_samples=args.samples,
+            max_completion=256,
+        )
+    else:
+        # ── HF fallback ────────────────────────────────────────
+        print(f"\n{'='*60}")
+        print("LOADING MODEL (HF)")
+        print(f"{'='*60}")
+        model, tokenizer = load_model("Qwen/Qwen2.5-1.5B", args.sft_checkpoint, args.model_path)
 
-    # OpenMathInstruct-2 schema: problem | generated_solution | expected_answer | problem_source
-    om2_result = probe_dataset(
-        model, tokenizer,
-        dataset_name="nvidia/OpenMathInstruct-2",
-        split="train",
-        problem_col="problem",
-        answer_col="expected_answer",
-        n_samples=args.samples,
-    )
-
-    # ── Step 5: Report ──────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print("RESULTS")
-    print(f"{'='*60}")
+        print(f"\n{'='*60}")
+        print("PROBE (HF): OpenMathInstruct-2")
+        print(f"{'='*60}")
+        om2_result = probe_dataset(
+            model, tokenizer,
+            dataset_name="nvidia/OpenMathInstruct-2",
+            split="train",
+            problem_col="problem",
+            answer_col="expected_answer",
+            n_samples=args.samples,
+        )
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
@@ -325,7 +438,7 @@ def main():
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "sft_checkpoint": args.sft_checkpoint,
         "samples_per_dataset": args.samples,
-        "config": {"G": 1, "T": "greedy", "max_completion": 512},
+        "config": {"G": 1, "T": "greedy", "max_completion": 256, "engine": "vLLM" if use_vllm else "HF"},
         "openmath_instruct_2": om2_result,
     }
 
