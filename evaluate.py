@@ -152,7 +152,7 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
         b = BENCHMARKS[bench_name]
         print(f"  Benchmark: {bench_name} ({b['dataset']})")
 
-        ds = load_dataset(b["dataset"], split=b["split"], streaming=True)
+        ds = load_dataset(b["dataset"], split=b["split"], streaming=True, token=True)
         correct = 0
         total = 0
         format_ok = 0

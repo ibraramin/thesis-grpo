@@ -46,6 +46,7 @@ def load_sft_dataset(config: dict, max_samples: int = 5000) -> Dataset:
         "default",
         split="train",
         streaming=True,
+        token=True,
     )
     samples = []
     for i, row in enumerate(ds):
@@ -85,6 +86,7 @@ def load_grpo_dataset(config: dict, max_samples: int = 2500) -> Dataset:
         config["training"]["grpo"]["dataset"],
         split="train",
         streaming=True,
+        token=True,
     )
     samples = []
     for i, row in enumerate(ds):
