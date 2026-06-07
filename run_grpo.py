@@ -361,6 +361,7 @@ def main():
         optim="adamw_8bit",
         max_completion_length=grpo_cfg["max_completion_length"],
         num_generations=grpo_cfg["num_generations"],
+        generation_batch_size=grpo_cfg["num_generations"],  # TRL 1.0.0: must be multiple of G
         beta=grpo_cfg["beta"],
         loss_type="grpo",
         use_vllm=not test_run,          # Disable vLLM for test-run (too heavy)
