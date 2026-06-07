@@ -52,26 +52,53 @@ def inspect_dataset(name: str, split: str = "train", n_rows: int = 5):
         return []
 
 
+def _find_model_path(repo_id: str) -> str | None:
+    """Find a locally cached model, including ModelScope-style lowercase IDs."""
+    from huggingface_hub import try_to_load_from_cache
+    candidates = [repo_id]
+    # ModelScope caches under lowercase repo IDs (qwen/Qwen2.5-1.5B vs Qwen/Qwen2.5-1.5B)
+    parts = repo_id.split("/")
+    if len(parts) == 2:
+        candidates.append(f"{parts[0].lower()}/{parts[1]}")
+    for cid in candidates:
+        info = try_to_load_from_cache(cid, "config.json")
+        if info:
+            return cid
+    return None
+
+
 def load_model(tokenizer_name: str, ckpt_path: str):
     """Load SFT model + tokenizer. Fall back to base if no checkpoint."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
 
-    # Respect HF_ENDPOINT for China mirror (hf-mirror.com)
-    hf_endpoint = os.environ.get("HF_ENDPOINT", "")
-    if hf_endpoint:
-        print(f"  Using HF endpoint: {hf_endpoint}")
+    # Check local cache first (handles ModelScope + HF offline scenarios)
+    local_id = _find_model_path(tokenizer_name)
+    if local_id:
+        print(f"  Found cached model: {local_id}")
+        tokenizer = AutoTokenizer.from_pretrained(
+            local_id, local_files_only=True, trust_remote_code=True
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            local_id,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            local_files_only=True,
+            trust_remote_code=True,
+        )
+    else:
+        hf_endpoint = os.environ.get("HF_ENDPOINT", "")
+        print(f"  Model not cached locally — downloading{f' via {hf_endpoint}' if hf_endpoint else ''}...")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            tokenizer_name,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        tokenizer_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
 
     if os.path.isdir(ckpt_path):
         print(f"  Loading LoRA adapter from {ckpt_path}")
