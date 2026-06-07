@@ -173,17 +173,69 @@ def filter_non_all_zero(grpo_dataset: Dataset, sft_model, tokenizer,
     return grpo_dataset.select(keep_indices)
 
 
+def _normalize_str(s: str) -> str:
+    """Collapse whitespace and strip for string comparison."""
+    s = s.strip()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
 def _check_answer(completion: str, ground_truth: str) -> bool:
-    """Check if a completion's <answer> tag matches the ground truth."""
-    match = re.search(r"<answer>\s*(-?\d+(?:\.\d+)?)\s*</answer>", completion)
+    """Check if a completion's <answer> tag matches the ground truth.
+
+    Handles: pure numeric, LaTeX (via sympy), equations, and multi-value
+    answers joined by \"or\".  Sympy is optional; falls back to string
+    comparison when not available.
+    """
+    match = re.search(r"<answer>(.*?)</answer>", completion, re.DOTALL)
     if not match:
         return False
+
+    predicted = match.group(1).strip()
+    target = ground_truth.strip()
+
+    # 1. Pure numeric comparison
     try:
-        predicted = float(match.group(1))
-        target = float(ground_truth)
-        return abs(predicted - target) < 1e-5
+        pred_num = float(predicted.replace(",", ""))
+        tgt_num = float(target.replace(",", ""))
+        if tgt_num == 0:
+            return abs(pred_num) < 1e-5
+        return abs(pred_num - tgt_num) / max(abs(tgt_num), 1e-6) < 1e-4
     except (ValueError, TypeError):
-        return False
+        pass
+
+    # 2. Sympy symbolic comparison (LaTeX / equations)
+    try:
+        from sympy.parsing.latex import parse_latex
+        from sympy import simplify, N
+        a_expr = parse_latex(predicted.replace(r"\text{ or }", ""))
+        b_expr = parse_latex(target.replace(r"\text{ or }", ""))
+        diff = simplify(a_expr - b_expr)
+        if diff == 0:
+            return True
+        if diff.is_number:
+            return abs(float(N(diff))) < 1e-4
+    except Exception:
+        pass
+
+    # 3. Normalized string comparison
+    if _normalize_str(predicted) == _normalize_str(target):
+        return True
+
+    # 4. \"or\"-separated answers — match any alternative
+    alt_sep = r"(?:\s+or\s+|\\text\{\s*or\s*\})"
+    if re.search(alt_sep, target):
+        alternatives = re.split(alt_sep, target)
+        for alt in alternatives:
+            alt = alt.strip()
+            if _check_answer(f"<answer>{alt}</answer>", alt):
+                # One of the alternatives is parseable — check predicted matches it
+                if _check_answer(completion, alt):
+                    return True
+            elif _normalize_str(predicted) == _normalize_str(alt):
+                return True
+
+    return False
 
 
 # ── Tokenization helpers ───────────────────────────────────────
