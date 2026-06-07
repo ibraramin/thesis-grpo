@@ -23,12 +23,13 @@ import numpy as np
 import torch
 from datetime import datetime
 
-from data import load_grpo_dataset, get_tokenizer, tokenize_grpo
+from data import load_grpo_dataset, get_tokenizer, tokenize_grpo, filter_non_all_zero
 from rewards import make_combined_reward_fn, DynamicRewardGater
 from grpo_trainer import StabilizedGRPOTrainer
 
 OUTPUT_DIR = "outputs"
 RESUME_MARKER = ".resume_marker"
+FILTERED_DATASET_DIR = "outputs/filtered_grpo"
 
 
 def find_latest_checkpoint(output_dir: str) -> str | None:
@@ -66,6 +67,8 @@ def parse_args():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--test-run", action="store_true",
                         help="Small-scale run for format validation")
+    parser.add_argument("--filter-dataset", action="store_true",
+                        help="Run all-zero filter on dataset before training (expensive, once)")
     return parser.parse_args()
 
 
@@ -179,6 +182,44 @@ def main():
     print(f"[GRPO] Loading dataset: {grpo_cfg['dataset']} (max {grpo_cfg['max_samples']})")
     dataset = load_grpo_dataset(cfg, max_samples=grpo_cfg["max_samples"])
     print(f"[GRPO] Dataset size: {len(dataset)}")
+
+    # ── All-Zero Filter (§3.1) ──────────────────────────────────
+    # Runs once: excludes samples the SFT model cannot solve at all.
+    # Must run BEFORE tokenization (filter expects prompt/answer columns).
+    # Cached to outputs/filtered_grpo/ for subsequent runs.
+    if args.filter_dataset:
+        filtered_path = os.path.join(FILTERED_DATASET_DIR, "filtered_dataset")
+        if os.path.exists(filtered_path):
+            print(f"[GRPO] Filtered dataset already exists at {filtered_path}")
+            from datasets import load_from_disk
+            dataset = load_from_disk(filtered_path)
+            print(f"[GRPO] Filtered dataset size: {len(dataset)}")
+        else:
+            print("[GRPO] Running all-zero filter (this is expensive, ~10-30 min)...")
+            print(f"[GRPO] Loading SFT base model for filtering: {sft_path}")
+            from transformers import AutoModelForCausalLM
+            filter_model = AutoModelForCausalLM.from_pretrained(
+                sft_path,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+            )
+            dataset = filter_non_all_zero(
+                dataset, filter_model, tokenizer,
+                group_size=grpo_cfg["num_generations"],
+                max_completion=grpo_cfg["max_completion_length"],
+            )
+            print(f"[GRPO] Filtered dataset size: {len(dataset)} (removed all-zero trajectories)")
+            os.makedirs(FILTERED_DATASET_DIR, exist_ok=True)
+            dataset.save_to_disk(filtered_path)
+            print(f"[GRPO] Saved filtered dataset to {filtered_path}")
+            del filter_model
+            torch.cuda.empty_cache()
+    elif os.path.exists(os.path.join(FILTERED_DATASET_DIR, "filtered_dataset")):
+        # Auto-use cached filtered dataset if available
+        from datasets import load_from_disk
+        print(f"[GRPO] Using cached filtered dataset from {FILTERED_DATASET_DIR}")
+        dataset = load_from_disk(os.path.join(FILTERED_DATASET_DIR, "filtered_dataset"))
+        print(f"[GRPO] Filtered dataset size: {len(dataset)}")
 
     dataset = tokenize_grpo(dataset, tokenizer, max_prompt_length=grpo_cfg["max_prompt_length"])
     print("[GRPO] Dataset tokenized")
@@ -312,6 +353,7 @@ def main():
         pspo_delta=stab_cfg["pspo_delta"],
         entropy_filter_enabled=stab_cfg["entropy_filter_enabled"],
         entropy_threshold=stab_cfg["entropy_threshold"],
+        dynamic_gater=gater,
     )
 
     # ── Train with auto-resume ─────────────────────────────────

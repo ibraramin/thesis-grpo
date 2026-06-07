@@ -172,6 +172,31 @@ def main():
         print("[1/4] SFT: Not in selected steps.")
 
     # ═══════════════════════════════════════════════════════════
+    # Step 1.5: All-Zero Dataset Filter (once, after SFT, before GRPO)
+    # ═══════════════════════════════════════════════════════════
+    filtered_dataset_dir = "outputs/filtered_grpo/filtered_dataset"
+    if "grpo" in steps and not args.dry_run and not test_run:
+        if not os.path.exists(filtered_dataset_dir):
+            cohort0 = cohort_names[0]
+            seed0 = seeds[0]
+            print(f"\n[1.5/4] Dataset Filter: Running all-zero filter (once)")
+            cmd = [
+                "python", "run_grpo.py",
+                "--config", args.config,
+                "--cohort", cohort0,
+                "--seed", str(seed0),
+                "--sft-checkpoint", sft_output,
+                "--filter-dataset",
+            ]
+            rc = subprocess.run(cmd).returncode
+            if rc != 0:
+                print("[WARN] Dataset filter failed. Continuing without filter...")
+            else:
+                print("[1.5/4] Dataset Filter: Complete.")
+        else:
+            print(f"\n[1.5/4] Dataset Filter: Already cached at {filtered_dataset_dir}")
+
+    # ═══════════════════════════════════════════════════════════
     # Step 2: GRPO (cohorts × seeds)
     # ═══════════════════════════════════════════════════════════
     if "grpo" in steps:

@@ -5,14 +5,27 @@ Subclasses TRL's GRPOTrainer to inject:
   - PSPO probability smoothing (§3.3)
   - Entropy-filtered advantage masking with hard ln(2) threshold (§3.3)
   - K3 Schulman KL estimator (already default in TRL 1.0.0, §4)
-
-The _compute_loss override mirrors TRL 1.0.0's default GRPO loss with
-three modifications clearly annotated [PSPO], [ENTROPY], [K3].
+  - Dynamic gater step callback (Cohort D, §3.4)
 """
 
 import torch
 from trl import GRPOTrainer, GRPOConfig
+from transformers import TrainerCallback
 from stabilization import pspo_smooth_logprobs, entropy_filter_mask
+
+
+class DynamicGaterCallback(TrainerCallback):
+    """Advances the DynamicRewardGater after every optimizer step (Cohort D).
+
+    This ensures λ_format(t) = 1.0 * e^(-γ·t) actually decays, where t is
+    the global training step. Without this callback, t stays at 0 permanently.
+    """
+
+    def __init__(self, gater):
+        self._gater = gater
+
+    def on_step_end(self, args, state, control, **kwargs):
+        self._gater.step()
 
 
 class StabilizedGRPOTrainer(GRPOTrainer):
@@ -30,6 +43,7 @@ class StabilizedGRPOTrainer(GRPOTrainer):
         pspo_enabled: bool = True,
         entropy_threshold: float = 0.693,
         entropy_filter_enabled: bool = True,
+        dynamic_gater=None,
         *args,
         **kwargs,
     ):
@@ -38,6 +52,9 @@ class StabilizedGRPOTrainer(GRPOTrainer):
         self._pspo_enabled = pspo_enabled
         self._entropy_threshold = entropy_threshold
         self._entropy_filter_enabled = entropy_filter_enabled
+        # Register dynamic gater callback for Cohort D (§3.4)
+        if dynamic_gater is not None:
+            self.add_callback(DynamicGaterCallback(dynamic_gater))
 
     # ── Override: _compute_loss ─────────────────────────────────
     # Same logic as TRL 1.0.0 GRPOTrainer._compute_loss with
