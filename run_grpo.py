@@ -195,12 +195,24 @@ def main():
     # Cached to outputs/filtered_grpo/ for subsequent runs.
     if args.filter_dataset:
         filtered_path = os.path.join(FILTERED_DATASET_DIR, "filtered_dataset")
+        filter_needed = True
         if os.path.exists(filtered_path):
             print(f"[GRPO] Filtered dataset already exists at {filtered_path}")
-            from datasets import load_from_disk
-            dataset = load_from_disk(filtered_path)
-            print(f"[GRPO] Filtered dataset size: {len(dataset)}")
-        else:
+            try:
+                from datasets import load_from_disk
+                dataset = load_from_disk(filtered_path)
+                print(f"[GRPO] Filtered dataset size: {len(dataset)}")
+                if len(dataset) > 0:
+                    filter_needed = False
+                else:
+                    dataset = None
+            except Exception:
+                print("[GRPO] WARNING: Corrupt cached filter, re-running...")
+                dataset = None
+        if filter_needed:
+            import shutil
+            if os.path.exists(filtered_path):
+                shutil.rmtree(filtered_path)
             print("[GRPO] Running all-zero filter (this is expensive, ~10-30 min)...")
             sft_path = args.sft_checkpoint
             print(f"[GRPO] Loading SFT base model for filtering: {sft_path}")
@@ -229,12 +241,16 @@ def main():
         # Auto-use cached filtered dataset if available
         from datasets import load_from_disk
         print(f"[GRPO] Using cached filtered dataset from {FILTERED_DATASET_DIR}")
-        dataset = load_from_disk(os.path.join(FILTERED_DATASET_DIR, "filtered_dataset"))
-        print(f"[GRPO] Filtered dataset size: {len(dataset)}")
-        if len(dataset) == 0:
-            print("[GRPO] WARNING: Cached filtered dataset is empty — falling back to unfiltered")
+        try:
+            dataset = load_from_disk(os.path.join(FILTERED_DATASET_DIR, "filtered_dataset"))
+            print(f"[GRPO] Filtered dataset size: {len(dataset)}")
+            if len(dataset) == 0:
+                print("[GRPO] WARNING: Cached filtered dataset is empty — falling back to unfiltered")
+                dataset = load_grpo_dataset(cfg, max_samples=grpo_cfg["max_samples"])
+                print(f"[GRPO] Dataset size: {len(dataset)}")
+        except Exception:
+            print("[GRPO] WARNING: Corrupt cached filter, falling back to unfiltered")
             dataset = load_grpo_dataset(cfg, max_samples=grpo_cfg["max_samples"])
-            print(f"[GRPO] Dataset size: {len(dataset)}")
 
     dataset = tokenize_grpo(dataset, tokenizer, max_prompt_length=grpo_cfg["max_prompt_length"])
     print("[GRPO] Dataset tokenized")
