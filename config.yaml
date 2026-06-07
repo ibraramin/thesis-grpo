@@ -1,0 +1,106 @@
+# ═══════════════════════════════════════════════════════════════
+# Dynamic Reward-Gating in GRPO — Single Config Source of Truth
+# ═══════════════════════════════════════════════════════════════
+
+model:
+  name: "Qwen/Qwen2.5-1.5B"
+  load_in_4bit: true
+  lora_r: 64
+  lora_alpha: 128
+  lora_targets:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+training:
+  sft:
+    dataset: "open-r1/OpenR1-Math-220k"
+    max_samples: 5000
+    epochs: 1
+    learning_rate: 5.0e-6
+    batch_size: 4
+    gradient_accumulation_steps: 4
+    warmup_ratio: 0.1
+    max_seq_length: 2048
+
+  grpo:
+    dataset: "SynthLabsAI/Big-Math-RL-Verified"
+    max_samples: 2500
+    epochs: 2
+    learning_rate: 5.0e-6
+    warmup_ratio: 0.1
+    num_generations: 16       # G — group size
+    max_prompt_length: 256
+    max_completion_length: 1792
+    beta: 0.04                # KL penalty coefficient
+    epsilon: 0.2              # PPO clip range
+
+  stabilization:
+    pspo_enabled: true
+    pspo_delta: 0.1           # smoothing coefficient δ
+    entropy_filter_enabled: true
+    entropy_threshold: 0.693  # ln(2)
+    kl_estimator: "k3"        # "k1" | "k3" (Schulman unbiased)
+
+# ── Experimental Cohorts ──────────────────────────────────────
+# Each entry: {correctness, format, graduated, dynamic}
+#   graduated: use continuous reward (0.2/0.5/1.0 tiers)
+#   dynamic:   format weight decays as λ_format(t) = 1.0 * e^(-γ*t)
+cohorts:
+  baseline:
+    correctness: 1.0
+    format: 0.0
+    graduated: false
+    dynamic: false
+  A:
+    correctness: 0.5
+    format: 1.5
+    graduated: false
+    dynamic: false
+  B:
+    correctness: 1.5
+    format: 0.2
+    graduated: false
+    dynamic: false
+  C:
+    correctness: 1.0
+    format: 0.2
+    graduated: true
+    dynamic: false
+  D:
+    correctness: 1.0
+    format: 1.0        # initial; decays
+    graduated: false
+    dynamic: true
+    gamma: 0.01         # decay coefficient
+
+# ── Evaluation ─────────────────────────────────────────────────
+evaluation:
+  benchmarks:
+    - math500
+    - aime24
+  num_seeds: 4
+  max_new_tokens: 512
+  temperature: 0.0          # greedy
+
+# ── Test-Run Overrides (for --test-run flag) ────────────────────
+# These values replace the corresponding training/eval fields
+# when running in test mode. Designed to complete in <2 min on a
+# single GPU while exercising every pipeline stage.
+test_run:
+  sft_max_samples: 10
+  grpo_max_samples: 10
+  eval_max_samples: 3
+  num_generations: 4        # G=4 instead of 16
+  max_completion_length: 128
+  max_new_tokens: 64
+  num_seeds: 1              # single seed
+  epochs: 1
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  report_file: "outputs/test_run/report.txt"
+  output_dir: "outputs/test_run"

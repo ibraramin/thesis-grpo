@@ -1,0 +1,20 @@
+services:
+  thesis-grpo:
+    build: .
+    image: thesis-grpo:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - HF_HOME=/workspace/.cache/huggingface
+      - WANDB_MODE=disabled
+    volumes:
+      - ./outputs:/workspace/outputs
+      - hf_cache:/workspace/.cache/huggingface
+
+volumes:
+  hf_cache:

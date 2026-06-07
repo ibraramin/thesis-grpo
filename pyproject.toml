@@ -1,0 +1,22 @@
+[project]
+name = "thesis-grpo"
+version = "0.1.0"
+description = "Dynamic Reward-Gating in GRPO for Small Language Models"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4.0",
+    "unsloth>=2024.11.0",
+    "trl>=0.12.0",
+    "vllm>=0.6.0",
+    "bitsandbytes>=0.44.0",
+    "transformers>=4.44.0",
+    "datasets>=2.20.0",
+    "accelerate>=0.34.0",
+    "peft>=0.12.0",
+    "pyyaml>=6.0",
+    "scipy>=1.10.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "tqdm>=4.66.0",
+    "numpy>=1.26.0",
+]
