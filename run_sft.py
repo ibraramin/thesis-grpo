@@ -220,7 +220,6 @@ def main():
             fp16=not model_cfg["load_in_4bit"],
             bf16=torch.cuda.is_bf16_supported(),
             optim="adamw_8bit",
-            max_seq_length=sft_cfg["max_seq_length"],
             packing=False,
             report_to="none",
             load_best_model_at_end=False,
