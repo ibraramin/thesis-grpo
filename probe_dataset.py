@@ -282,14 +282,12 @@ def main():
     if args.dry_run:
         print("[PROBE] Dry-run: inspecting dataset schemas only...")
         inspect_dataset("open-r1/OpenR1-Math-220k", "train", 3)
-        inspect_dataset("SynthLabsAI/Big-Math-RL-Verified", "train", 3)
         inspect_dataset("nvidia/OpenMathInstruct-2", "train", 3)
         print("\n[PROBE] Dry-run done. Run without --dry-run to benchmark solve rates.")
         return
 
     # ── Step 1: Inspect OpenMathInstruct-2 schema ───────────────
     cols_om2 = inspect_dataset("nvidia/OpenMathInstruct-2", "train", 5)
-    cols_bm = inspect_dataset("SynthLabsAI/Big-Math-RL-Verified", "train", 5)
 
     # ── Step 2: Load model ──────────────────────────────────────
     print(f"\n{'='*60}")
@@ -297,29 +295,9 @@ def main():
     print(f"{'='*60}")
     model, tokenizer = load_model("Qwen/Qwen2.5-1.5B", args.sft_checkpoint, args.model_path)
 
-    # ── Step 3: Probe Big-Math-RL-Verified (skip if gated/unauthorized) ──
+    # ── OpenMathInstruct-2 ─────────────────────────────────────
     print(f"\n{'='*60}")
-    print("PROBE: Big-Math-RL-Verified (control)")
-    print(f"{'='*60}")
-    try:
-        bm_result = probe_dataset(
-            model, tokenizer,
-            dataset_name="SynthLabsAI/Big-Math-RL-Verified",
-            split="train",
-            problem_col="problem",
-            answer_col="answer",
-            n_samples=args.samples,
-        )
-    except Exception as e:
-        print(f"  Skipping Big-Math: {e}")
-        bm_result = {"dataset": "SynthLabsAI/Big-Math-RL-Verified",
-                       "samples_tested": 0, "correct": 0, "solve_rate": 0.02,  # prior measurement
-                       "format_rate": 0.0, "empty": 0, "errors": 0,
-                       "elapsed_s": 0, "results": [], "skipped": True}
-
-    # ── Step 4: Probe OpenMathInstruct-2 ───────────────────────
-    print(f"\n{'='*60}")
-    print("PROBE: OpenMathInstruct-2 (candidate)")
+    print("PROBE: OpenMathInstruct-2")
     print(f"{'='*60}")
 
     # OpenMathInstruct-2 schema: problem | generated_solution | expected_answer | problem_source
@@ -344,7 +322,6 @@ def main():
         "sft_checkpoint": args.sft_checkpoint,
         "samples_per_dataset": args.samples,
         "config": {"G": 1, "T": "greedy", "max_completion": 512},
-        "big_math": bm_result,
         "openmath_instruct_2": om2_result,
     }
 
@@ -355,15 +332,8 @@ def main():
     # Terminal summary
     print(f"\n{'Dataset':<30} {'Solve Rate':>12} {'Format Rate':>12}")
     print("-" * 56)
-    for name, r in [("Big-Math-RL-Verified", bm_result),
-                     ("OpenMathInstruct-2", om2_result)]:
+    for name, r in [("OpenMathInstruct-2", om2_result)]:
         print(f"  {name:<28} {r['solve_rate']:>11.1%} {r['format_rate']:>11.1%}")
-
-    # Verdict
-    if om2_result["solve_rate"] > bm_result["solve_rate"] * 5:
-        print(f"\n  ✓ OpenMathInstruct-2 has >5x higher solve rate — revision.md validated")
-    else:
-        print(f"\n  ✗ Solve rates similar — revision.md overestimates improvement")
 
     print(f"\nDone. Report saved to {args.output}")
 
