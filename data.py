@@ -144,8 +144,8 @@ def filter_non_all_zero(grpo_dataset: Dataset, sft_model, tokenizer,
             outputs = sft_model.generate(
                 **inputs,
                 max_new_tokens=max_completion,
-                do_sample=True,
-                temperature=0.7,
+                do_sample=(group_size > 1),     # greedy for G=1, sample for G>1
+                temperature=0.7 if group_size > 1 else 1.0,
                 top_p=0.9,
                 num_return_sequences=group_size,
                 pad_token_id=tokenizer.pad_token_id,
