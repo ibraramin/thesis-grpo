@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument("--samples", type=int, default=50, help="Number of problems to probe")
     parser.add_argument("--group-sizes", type=int, nargs="+", default=[1, 2, 4],
                         help="G values to test (e.g. --group-sizes 2 4)")
-    parser.add_argument("--max-completion", type=int, default=1024)
+    parser.add_argument("--max-completion", type=int, default=512)
     parser.add_argument("--output", default=OUTPUT_DIR)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--debug", action="store_true",
@@ -158,7 +158,7 @@ def main():
 
     # ── Format prompts with chat template ───────────────────────
     from data import format_grpo_prompt
-    prompts = [format_grpo_prompt(s["problem"]) + "<think>\n" for s in samples]
+    prompts = [format_grpo_prompt(s["problem"]) for s in samples]
     answers = [s["answer"] for s in samples]
 
     # ── Save questions and answers ──────────────────────────────
@@ -199,7 +199,7 @@ def main():
         sampling_params = SamplingParams(
             n=g,
             max_tokens=args.max_completion,
-            temperature=0.7 if g > 1 else 0.0,
+            temperature=0.0,
             top_p=0.9,
             stop=["<|im_end|>", "<|endoftext|>"],
         )

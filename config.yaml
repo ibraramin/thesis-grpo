@@ -42,7 +42,8 @@ training:
     difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)
     difficulty_alpha: 0.5     # difficulty sensitivity coefficient
     filter_probe:
-      group_size: 2           # G for all-zero filter probe
+      enabled: false           # Disabled: all-zero filter too strict for 1.5B
+      group_size: 2
       max_completion_length: 1024
       batch_size: 4
 

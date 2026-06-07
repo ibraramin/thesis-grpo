@@ -193,7 +193,9 @@ def main():
     # Runs once: excludes samples the SFT model cannot solve at all.
     # Must run BEFORE tokenization (filter expects prompt/answer columns).
     # Cached to outputs/filtered_grpo/ for subsequent runs.
-    if args.filter_dataset:
+    # Respect the config-level filter_probe.enabled flag.
+    filter_enabled = grpo_cfg.get("filter_probe", {}).get("enabled", True)
+    if args.filter_dataset and filter_enabled:
         filtered_path = os.path.join(FILTERED_DATASET_DIR, "filtered_dataset")
         filter_needed = True
         if os.path.exists(filtered_path):
