@@ -25,6 +25,8 @@ from rewards import _extract_answer
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 MATH500_LOCAL = os.path.join(DATA_DIR, "math500_eval.jsonl")
 AIME24_LOCAL = os.path.join(DATA_DIR, "aime24_eval.jsonl")
+GSM8K_LOCAL = os.path.join(DATA_DIR, "gsm8k_eval.jsonl")
+SVAMP_LOCAL = os.path.join(DATA_DIR, "svamp_eval.jsonl")
 
 
 BENCHMARKS = {
@@ -39,6 +41,18 @@ BENCHMARKS = {
         "split": "train",
         "problem_col": "problem",
         "answer_col": "solution",  # AIME24 stores answer in solution field
+    },
+    "gsm8k": {
+        "dataset": "gsm8k",
+        "split": "test",
+        "problem_col": "problem",
+        "answer_col": "answer",
+    },
+    "svamp": {
+        "dataset": "ChilleD/SVAMP",
+        "split": "test",
+        "problem_col": "problem",
+        "answer_col": "answer",
     },
 }
 
@@ -73,6 +87,8 @@ def _load_benchmark_rows(bench_name: str, max_samples: int | None = None):
     local_paths = {
         "math500": MATH500_LOCAL,
         "aime24": AIME24_LOCAL,
+        "gsm8k": GSM8K_LOCAL,
+        "svamp": SVAMP_LOCAL,
     }
     b = BENCHMARKS[bench_name]
     local_path = local_paths.get(bench_name)

@@ -101,7 +101,8 @@ cohorts:
 evaluation:
   benchmarks:
     - math500
-    - aime24
+    - gsm8k
+    - svamp
   num_seeds: 4
   max_new_tokens: 512
   temperature: 0.0          # greedy

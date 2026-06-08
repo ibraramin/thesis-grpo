@@ -95,12 +95,50 @@ def download_aime24(n: int = 30):
     print(f"  Saved {written} samples → {out} ({os.path.getsize(out)/1024:.0f} KB)")
 
 
+def download_gsm8k(n: int = 1319):
+    """GSM8k evaluation dataset — grade-school math word problems."""
+    print(f"Downloading gsm8k (test) — {n} samples...")
+    ds = load_dataset("gsm8k", "main", split="test", streaming=True, token=True)
+    out = os.path.join(DATA_DIR, "gsm8k_eval.jsonl")
+    written = 0
+    with open(out, "w") as f:
+        for i, row in enumerate(ds):
+            if i >= n:
+                break
+            # GSM8k answer format: "#### <number>", extract just the number
+            answer = row.get("answer", "")
+            if "####" in answer:
+                answer = answer.split("####")[-1].strip()
+            f.write(json.dumps({"problem": row["question"], "answer": str(answer)}) + "\n")
+            written += 1
+    print(f"  Saved {written} samples → {out} ({os.path.getsize(out)/1024:.0f} KB)")
+
+
+def download_svamp(n: int = 1000):
+    """SVAMP — simple math word problems with variations."""
+    print(f"Downloading SVAMP (test) — {n} samples...")
+    ds = load_dataset("ChilleD/SVAMP", split="test", streaming=True, token=True)
+    out = os.path.join(DATA_DIR, "svamp_eval.jsonl")
+    written = 0
+    with open(out, "w") as f:
+        for i, row in enumerate(ds):
+            if i >= n:
+                break
+            problem = f"{row.get('Body', '')} {row.get('Question', '')}"
+            answer = str(row.get("Answer", ""))
+            f.write(json.dumps({"problem": problem, "answer": answer}) + "\n")
+            written += 1
+    print(f"  Saved {written} samples → {out} ({os.path.getsize(out)/1024:.0f} KB)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download all production datasets")
     parser.add_argument("--sft-samples", type=int, default=5000)
     parser.add_argument("--grpo-samples", type=int, default=50000)
     parser.add_argument("--math500-samples", type=int, default=500)
     parser.add_argument("--aime24-samples", type=int, default=30)
+    parser.add_argument("--gsm8k-samples", type=int, default=1319)
+    parser.add_argument("--svamp-samples", type=int, default=1000)
     args = parser.parse_args()
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -109,6 +147,8 @@ def main():
     download_openmath_grpo(args.grpo_samples)
     download_math500(args.math500_samples)
     download_aime24(args.aime24_samples)
+    download_gsm8k(args.gsm8k_samples)
+    download_svamp(args.svamp_samples)
 
     print("\nAll datasets downloaded to data/*.jsonl")
     print("Add these files to git and push.")
