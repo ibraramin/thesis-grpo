@@ -4,7 +4,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
+# Use Alibaba mirror for China deployments; remove -i flag for non-China builds.
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
     "unsloth>=2024.11.0" \
     "trl>=1.0.0,<1.1.0" \
     "vllm>=0.10.2,<0.18.0" \

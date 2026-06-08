@@ -9,6 +9,7 @@ Qwen2.5-1.5B · GRPO · RTX 3090 / A5000 (24 GB) · 5 experimental cohorts
 apt install -y git python3-pip
 
 # Python deps (CUDA 12.x — works for 12.4–12.8)
+# China: add -i https://mirrors.aliyun.com/pypi/simple/
 pip install torch transformers accelerate peft bitsandbytes datasets trl>=1.0.0 \
     vllm>=0.10.2,<0.18.0 scipy matplotlib seaborn sympy antlr4-python3-runtime
 ```
