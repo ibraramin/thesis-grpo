@@ -480,22 +480,37 @@ def main():
 
     debug_loop = args.debug_file or args.output.replace(".json", "_loops.json")
 
-    # ── Try vLLM first (requires merged model) ──────────────────
-    merged_path = os.path.join(args.sft_checkpoint, "merged")
+    # ── Resolve vLLM model path (tried in priority order) ────────
     use_vllm = False
+    vllm_model_path = None
     try:
         from vllm import LLM
+        # 1. Merged SFT checkpoint
+        merged_path = os.path.join(args.sft_checkpoint, "merged")
         if os.path.isdir(merged_path) and os.path.exists(os.path.join(merged_path, "config.json")):
             use_vllm = True
+            vllm_model_path = merged_path
+        # 2. Explicit --model-path
+        elif args.model_path and os.path.isdir(args.model_path) and \
+             os.path.exists(os.path.join(args.model_path, "config.json")):
+            use_vllm = True
+            vllm_model_path = args.model_path
+        # 3. Cached base model (HF or ModelScope)
+        else:
+            local_id = _find_model_path("Qwen/Qwen2.5-1.5B")
+            if local_id and os.path.exists(os.path.join(local_id, "config.json")):
+                use_vllm = True
+                vllm_model_path = local_id
     except ImportError:
         pass
 
     if use_vllm:
         print(f"\n{'='*60}")
-        print("PROBE (vLLM): OpenMathInstruct-2")
+        print(f"PROBE (vLLM): OpenMathInstruct-2")
+        print(f"  Model: {vllm_model_path}")
         print(f"{'='*60}")
         om2_result = probe_dataset_vllm(
-            merged_model_path=merged_path,
+            merged_model_path=vllm_model_path,
             dataset_name="nvidia/OpenMathInstruct-2",
             split="train",
             problem_col="problem",
