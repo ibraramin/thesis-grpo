@@ -64,7 +64,7 @@ def main():
         model=sft_path,
         tensor_parallel_size=1,
         gpu_memory_utilization=0.90,
-        max_model_len=2048,
+        max_model_len=3584,      # accommodate long prompts + completions
         dtype="bfloat16",
         trust_remote_code=True,
     )
