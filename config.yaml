@@ -37,6 +37,7 @@ training:
     max_prompt_length: 256
     max_completion_length: 512  # Cap looping garbage; raise to 1792 once EOS works
     gradient_accumulation_steps: 8  # 125 optimizer steps @ 1000 samples × G=4
+    vllm_memory_utilization: 0.65  # scales with free VRAM; 0.3 is conservative, 0.65 uses ~17GB
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
     difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)
