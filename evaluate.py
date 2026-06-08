@@ -244,7 +244,9 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
     rows, b_info = _load_benchmark_rows(bench_name, max_samples)
 
     print(f"    vLLM: batch-generating {len(rows)} prompts...")
-    llm = LLM(model=vllm_model_path, trust_remote_code=True, gpu_memory_utilization=0.85)
+    torch.cuda.empty_cache()
+    llm = LLM(model=vllm_model_path, trust_remote_code=True,
+              gpu_memory_utilization=0.5)  # lower for eval alongside other processes
     sampling_params = SamplingParams(temperature=0, max_tokens=max_new_tokens)
 
     prompts = []
@@ -486,9 +488,9 @@ def main():
     # ── Save results ──────────────────────────────────────────
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     if all_results:
-        fieldnames = list(all_results[0].keys())
+        fieldnames = sorted(set().union(*(r.keys() for r in all_results)))
         with open(args.output, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(all_results)
         print(f"\nResults saved to {args.output}")
