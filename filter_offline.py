@@ -22,11 +22,12 @@ import os
 import sys
 
 import yaml
-from datasets import load_dataset
 from tqdm import tqdm
 from vllm import LLM, SamplingParams
 
-from data import format_grpo_prompt, _check_answer
+from data import format_grpo_prompt, _check_answer, DATA_DIR
+
+GRPO_LOCAL = os.path.join(DATA_DIR, "openmath_instruct_2_grpo.jsonl")
 
 
 def parse_args():
@@ -66,40 +67,57 @@ def main():
         trust_remote_code=True,
     )
     sampling_params = SamplingParams(
-        temperature=0.0,
+        temperature=0.7,        # sampling for diversity across G completions
         max_tokens=args.max_tokens,
         n=args.g,
     )
 
-    # ── Load dataset (streaming) ────────────────────────────────
+    # ── Load dataset ────────────────────────────────────────────
     print(f"Loading dataset: {dataset_name} (max {args.prompts} prompts)")
-    ds = load_dataset(dataset_name, split="train", streaming=True, token=True)
+    # Prefer local JSONL (offline), fall back to HF streaming
+    if os.path.exists(GRPO_LOCAL):
+        print(f"  Using local file: {GRPO_LOCAL}")
+        rows = []
+        with open(GRPO_LOCAL) as f:
+            for i, line in enumerate(f):
+                if i >= args.prompts:
+                    break
+                row = json.loads(line)
+                problem = row.get("problem", "")
+                answer = row.get("answer", "")
+                if problem and answer:
+                    rows.append({"problem": problem, "answer": answer})
+    else:
+        from datasets import load_dataset
+        print(f"  Streaming from HF: {dataset_name}")
+        ds = load_dataset(dataset_name, split="train", streaming=True, token=True)
+        rows = []
+        for i, row in enumerate(ds):
+            if i >= args.prompts:
+                break
+            problem = row.get("problem", "")
+            answer = row.get("answer") or row.get("expected_answer", "")
+            if problem and answer:
+                rows.append({"problem": problem, "answer": str(answer)})
+    print(f"  Loaded {len(rows)} prompts")
 
     kept = []
     total = 0
     correct_prompts = 0
 
-    for row in tqdm(ds, total=args.prompts, desc="Filtering", unit="prompts"):
-        if total >= args.prompts:
-            break
-
-        problem = row.get("problem", "")
-        answer = row.get("answer", "")
-        if not problem or not answer:
-            continue
-
+    for entry in tqdm(rows, desc="Filtering", unit="prompts"):
         total += 1
-        prompt_str = format_grpo_prompt(problem)
+        prompt_str = format_grpo_prompt(entry["problem"])
 
         # Generate G completions
         outputs = llm.generate([prompt_str], sampling_params)
         completions = [o.text for o in outputs[0].outputs]
 
         # Check if any completion matches the ground truth
-        any_correct = any(_check_answer(comp, answer) for comp in completions)
+        any_correct = any(_check_answer(comp, entry["answer"]) for comp in completions)
 
         if any_correct:
-            kept.append({"prompt": prompt_str, "answer": answer})
+            kept.append({"prompt": prompt_str, "answer": entry["answer"]})
             correct_prompts += 1
 
     # ── Save ────────────────────────────────────────────────────
