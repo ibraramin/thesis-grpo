@@ -333,7 +333,11 @@ def _check_answer(completion: str, ground_truth: str) -> bool:
 def get_tokenizer(model_name: str):
     """Load the tokenizer for the given model."""
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    kwargs = {}
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, fix_mistral_regex=True)
+    except TypeError:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"       # required for decoder-only generation
