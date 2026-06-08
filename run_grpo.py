@@ -360,6 +360,7 @@ def main():
         logging_steps=5,
         save_strategy="steps",
         save_steps=50,
+        save_total_limit=2,            # Keep only last 2 checkpoints (~500MB each)
         bf16=torch.cuda.is_bf16_supported(),
         optim="adamw_8bit",
         max_completion_length=grpo_cfg["max_completion_length"],
@@ -421,6 +422,14 @@ def main():
     print(f"[GRPO] Saving checkpoint to {output_dir}")
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
+
+    # Clean up intermediate checkpoints — final adapter is already saved
+    ckpt_dirs = glob.glob(os.path.join(output_dir, "checkpoint-*"))
+    for d in ckpt_dirs:
+        import shutil
+        shutil.rmtree(d)
+    if ckpt_dirs:
+        print(f"[GRPO] Cleaned {len(ckpt_dirs)} intermediate checkpoints")
 
     if test_run:
         with open(report_path, "a") as rf:

@@ -261,6 +261,14 @@ def main():
     model.save_pretrained(args.output)
     tokenizer.save_pretrained(args.output)
 
+    # Clean up intermediate checkpoints
+    ckpt_dirs = glob.glob(os.path.join(args.output, "checkpoint-*"))
+    for d in ckpt_dirs:
+        import shutil
+        shutil.rmtree(d)
+    if ckpt_dirs:
+        print(f"[SFT] Cleaned {len(ckpt_dirs)} intermediate checkpoints")
+
     # Save merged model for vLLM fast inference during GRPO
     # Test-run: skip merging (slow, not needed for format validation)
     if test_run:
