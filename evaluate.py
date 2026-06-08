@@ -167,29 +167,30 @@ def answers_match(predicted: str, ground_truth: str) -> bool:
     return False
 
 
-def _resolve_model_path(model_name: str, sft_merged: str | None = None) -> str:
-    """Find local model path: cached HF, ModelScope, or SFT merged checkpoint."""
+def _resolve_model_path(model_name: str, sft_merged: str | None = None) -> tuple[str, bool]:
+    """Find local model path: cached HF, ModelScope, or SFT merged.
+    Returns (path, is_local)."""
     from huggingface_hub import try_to_load_from_cache
 
-    # 1. Check HF cache (exact and ModelScope-style lowercase)
+    # 1. Check HF cache for safetensors (not just config.json — avoids partial downloads)
     for cid in [model_name, model_name.lower()]:
-        if try_to_load_from_cache(cid, "config.json"):
-            return cid
+        if try_to_load_from_cache(cid, "model.safetensors"):
+            return cid, True
 
     # 2. Scan HF cache directory for matching model
     import glob
     name = model_name.split("/")[-1]
     for d in glob.glob(os.path.expanduser(f"~/.cache/huggingface/hub/models--*{name}*")):
         inner = os.path.basename(d).replace("models--", "").replace("--", "/")
-        if try_to_load_from_cache(inner, "config.json"):
-            return inner
+        if try_to_load_from_cache(inner, "model.safetensors"):
+            return inner, True
 
     # 3. Fall back to SFT merged checkpoint (has full model files)
-    if sft_merged and os.path.isdir(sft_merged) and os.path.exists(os.path.join(sft_merged, "config.json")):
-        return sft_merged
+    if sft_merged and os.path.isdir(sft_merged) and os.path.exists(os.path.join(sft_merged, "model.safetensors")):
+        return sft_merged, True
 
     # 4. Last resort: original name (will download)
-    return model_name
+    return model_name, False
 
 
 def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict,
@@ -214,16 +215,15 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
     tokenizer = get_tokenizer(model_cfg["name"])
 
     # Load base model — prefer local cache to avoid slow download
-    model_path = _resolve_model_path(model_cfg["name"], sft_merged_path)
-    local_only = model_path != model_cfg["name"]
-    if local_only:
+    model_path, is_local = _resolve_model_path(model_cfg["name"], sft_merged_path)
+    if is_local:
         print(f"    Using local model: {model_path}")
 
     base_model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
-        local_files_only=local_only,
+        local_files_only=is_local,
     )
     model = PeftModel.from_pretrained(base_model, ckpt_path)
     model.eval()
