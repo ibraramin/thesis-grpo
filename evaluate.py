@@ -249,6 +249,32 @@ def _merge_ckpt_for_vllm(ckpt_path: str, base_model_path: str | None = None) -> 
     return vllm_dir
 
 
+def normalize_answer(text: str) -> str:
+    """Normalize an answer string for comparison: strip whitespace, LaTeX, etc."""
+    text = text.strip()
+    # Remove leading/trailing $ signs
+    text = re.sub(r"^\$+|\$+$", "", text)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _extract_last_number(text: str) -> float | None:
+    """Extract the last number from a completion — no XML tag requirement.
+
+    This is what published benchmarks (GSM8k, MATH) use — lenient extraction
+    that matches the standard evaluation protocol. Returns None if no number found.
+    """
+    # Find all numbers in the text (including negatives, decimals, LaTeX fractions)
+    numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
+    if not numbers:
+        return None
+    try:
+        return float(numbers[-1])
+    except (ValueError, TypeError):
+        return None
+
+
 def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
                           max_samples: int | None, max_new_tokens: int,
                           test_log_lines: list[str] | None) -> dict:
@@ -279,14 +305,17 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
     correct = 0
     total = 0
     format_ok = 0
+    correct_lenient = 0
     total_length = 0
 
     for i, (output, answer) in enumerate(zip(outputs, answers)):
         completion = output.outputs[0].text
         predicted = _extract_answer(completion)
+        predicted_lenient = _extract_last_number(completion)
         has_format = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
                      bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
         is_correct = predicted is not None and answers_match(str(predicted), str(answer))
+        is_correct_lenient = predicted_lenient is not None and answers_match(str(predicted_lenient), str(answer))
 
         total += 1
         total_length += len(completion.split())
@@ -294,6 +323,8 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
             format_ok += 1
         if is_correct:
             correct += 1
+        if is_correct_lenient:
+            correct_lenient += 1
 
         if test_log_lines is not None:
             test_log_lines.append(
@@ -308,16 +339,19 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
     torch.cuda.empty_cache()
 
     accuracy = correct / total if total > 0 else 0.0
+    accuracy_lenient = correct_lenient / total if total > 0 else 0.0
     format_rate = format_ok / total if total > 0 else 0.0
     avg_length = total_length / total if total > 0 else 0.0
 
-    print(f"    Accuracy: {accuracy:.4f} ({correct}/{total})")
-    print(f"    Format:   {format_rate:.4f}")
-    print(f"    Avg len:  {avg_length:.1f} tokens")
-    print(f"    Time:     {elapsed:.1f}s")
+    print(f"    Strict (XML):  {accuracy:.4f} ({correct}/{total})")
+    print(f"    Lenient (num): {accuracy_lenient:.4f} ({correct_lenient}/{total})")
+    print(f"    Format:        {format_rate:.4f}")
+    print(f"    Avg len:       {avg_length:.1f} tokens")
+    print(f"    Time:          {elapsed:.1f}s")
 
     return {
         f"{bench_name}_accuracy": accuracy,
+        f"{bench_name}_accuracy_lenient": accuracy_lenient,
         f"{bench_name}_format_rate": format_rate,
         f"{bench_name}_avg_length": avg_length,
     }
@@ -384,6 +418,7 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
         correct = 0
         total = 0
         format_ok = 0
+        correct_lenient = 0
         total_length = 0
 
         for i, row in enumerate(rows):
@@ -408,9 +443,11 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
             )
 
             predicted = _extract_answer(completion)
+            predicted_lenient = _extract_last_number(completion)
             has_format = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
                          bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
             is_correct = predicted is not None and answers_match(str(predicted), str(ground_truth))
+            is_correct_lenient = predicted_lenient is not None and answers_match(str(predicted_lenient), str(ground_truth))
 
             if test_log_lines is not None:
                 test_log_lines.append(
@@ -427,18 +464,23 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
                 format_ok += 1
             if is_correct:
                 correct += 1
+            if is_correct_lenient:
+                correct_lenient += 1
 
         accuracy = correct / total if total > 0 else 0.0
+        accuracy_lenient = correct_lenient / total if total > 0 else 0.0
         format_rate = format_ok / total if total > 0 else 0.0
         avg_length = total_length / total if total > 0 else 0.0
 
         results[f"{bench_name}_accuracy"] = accuracy
+        results[f"{bench_name}_accuracy_lenient"] = accuracy_lenient
         results[f"{bench_name}_format_rate"] = format_rate
         results[f"{bench_name}_avg_length"] = avg_length
 
-        print(f"    Accuracy: {accuracy:.4f} ({correct}/{total})")
-        print(f"    Format:   {format_rate:.4f}")
-        print(f"    Avg len:  {avg_length:.1f} tokens")
+        print(f"    Strict (XML):  {accuracy:.4f} ({correct}/{total})")
+        print(f"    Lenient (num): {accuracy_lenient:.4f} ({correct_lenient}/{total})")
+        print(f"    Format:        {format_rate:.4f}")
+        print(f"    Avg len:       {avg_length:.1f} tokens")
 
         del model
         del base_model
