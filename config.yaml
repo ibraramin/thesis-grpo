@@ -95,7 +95,7 @@ cohorts:
     format: 1.0        # initial; decays
     graduated: false
     dynamic: true
-    gamma: 0.01         # decay coefficient
+    gamma: 0.005        # decay coefficient (slower: half-life ~139 opt-steps)
 
 # ── Evaluation ─────────────────────────────────────────────────
 evaluation:
