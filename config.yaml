@@ -19,25 +19,25 @@ model:
 training:
   sft:
     dataset: "open-r1/OpenR1-Math-220k"
-    max_samples: 5000
-    epochs: 1
+    max_samples: 10000          # revision.md: 10K for dense behavioral imitation
+    epochs: 2                   # 2 epochs for format imprint (was 1)
     learning_rate: 5.0e-6
-    batch_size: 4
-    gradient_accumulation_steps: 4
+    batch_size: 8               # effective batch 8×8=64 (revision.md §7)
+    gradient_accumulation_steps: 8
     warmup_ratio: 0.1
     max_seq_length: 2048
 
   grpo:
     dataset: "nvidia/OpenMathInstruct-2"  # local: data/openmath_instruct_2_grpo.jsonl
-    max_samples: 1000
-    epochs: 1                  # fast-mode: 1 epoch (revision.md min is 300 steps)
-    learning_rate: 5.0e-6
+    max_samples: 50000          # use full 50K local dataset
+    epochs: 1
+    learning_rate: 2.0e-6       # revision.md: 2e-6 for stable convergence
     warmup_ratio: 0.1
-    num_generations: 4        # G — group size (capped: EOS-looping on Qwen2.5-1.5B)
+    num_generations: 8         # G — group size (8 for better advantage estimation)
     max_prompt_length: 256
-    max_completion_length: 512  # Cap looping garbage; raise to 1792 once EOS works
-    gradient_accumulation_steps: 4  # 178 optimizer steps @ 711 samples × G=4
-    vllm_memory_utilization: 0.65  # scales with free VRAM; 0.3 is conservative, 0.65 uses ~17GB
+    max_completion_length: 512  # Cap for EOS-looping; raise to 1792 once fixed
+    gradient_accumulation_steps: 4  # ~300+ optimizer steps on filtered data
+    vllm_memory_utilization: 0.65  # scales with free VRAM; 0.3 is conservative
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
     difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)
@@ -53,8 +53,8 @@ training:
   # "solvable" problems for GRPO training. Prevents format-reward
   # hacking when the model cannot solve a problem at all.
   filter_offline:
-    input_prompts: 30000       # probes per run
-    g: 4                       # generations per prompt
+    input_prompts: 5000        # probes per run (faster; ~3K retained at 60%)
+    g: 8                       # generations per prompt
     max_completion: 512
     output: "outputs/filtered_grpo/filtered_dataset.jsonl"
 
