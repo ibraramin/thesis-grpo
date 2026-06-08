@@ -1,11 +1,14 @@
 """
-probe_dataset.py — Compare solve rates: Big-Math vs OpenMathInstruct-2.
+probe_dataset.py — Dataset solve-rate probe with EOS-looping diagnostics.
 
 Tests the revision.md hypothesis that Big-Math-RL-Verified is too hard
 for Qwen2.5-1.5B (2% solvable) while OpenMathInstruct-2 should yield
 30-60% solvable prompts, giving GRPO meaningful gradient signal.
 
-Run: python probe_dataset.py --sft-checkpoint outputs/sft_checkpoint
+Now with EOS-looping detection: repetitive tag generation (</think>,
+</blockquote>, etc.) that masks true solve rates.
+
+Run: python probe_dataset.py --sft-checkpoint outputs/sft_checkpoint --samples 500
 """
 
 import argparse
@@ -14,10 +17,63 @@ import os
 import time
 import torch
 
+from data import format_grpo_prompt
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
+LOOP_TAGS = ["</think>", "</blockquote>", "</answer>", "\n\n"]
+
+
+def _detect_eos_loop(completion: str):
+    """Detect EOS-looping: repetitive tag sequences at end of completion.
+
+    Returns (is_looping: bool, loop_tag: str | None, loop_count: int).
+    """
+    tail = completion[-400:] if len(completion) > 400 else completion
+    for tag in LOOP_TAGS:
+        count = 0
+        pos = len(tail)
+        tag_len = len(tag)
+        while pos >= tag_len and tail[pos - tag_len:pos] == tag:
+            count += 1
+            pos -= tag_len
+        if count >= 5:
+            return True, tag, count
+    return False, None, 0
+
+
+def _total_tokens(completion: str) -> int:
+    return len(completion.split())
+
+
+def _completion_stats(completion: str, ground_truth: str):
+    """Compute per-completion diagnostics: correctness, format, looping, length."""
+    import re
+    from data import _check_answer
+
+    has_think = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL))
+    has_answer = bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
+    has_tags = has_think and has_answer
+    is_correct = _check_answer(completion, str(ground_truth))
+    is_empty = len(completion.strip()) == 0 or completion.strip() == "<|im_start|>assistant"
+    is_looping, loop_tag, loop_n = _detect_eos_loop(completion)
+
+    return {
+        "has_tags": has_tags,
+        "has_think": has_think,
+        "has_answer": has_answer,
+        "correct": is_correct,
+        "empty": is_empty,
+        "eos_loop": is_looping,
+        "loop_tag": loop_tag,
+        "loop_count": loop_n,
+        "length_tokens": _total_tokens(completion),
+        "length_chars": len(completion),
+    }
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Probe dataset solve rates")
+    parser = argparse.ArgumentParser(description="Probe dataset solve rates + EOS-loop diagnostics")
     parser.add_argument("--sft-checkpoint", default="outputs/sft_checkpoint",
                         help="Path to merged SFT checkpoint")
     parser.add_argument("--model-path", default=None,
@@ -26,7 +82,11 @@ def parse_args():
                         help="Local JSONL file instead of streaming from HF")
     parser.add_argument("--samples", type=int, default=500,
                         help="Number of prompts to test per dataset")
+    parser.add_argument("--max-completion", type=int, default=512,
+                        help="Max new tokens per generation (default: 512)")
     parser.add_argument("--output", default="outputs/probe_results.json")
+    parser.add_argument("--debug-file", default=None,
+                        help="Dump all EOS-looped completions to this JSON file")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -144,27 +204,16 @@ def load_model(tokenizer_name: str, ckpt_path: str, model_path: str | None = Non
     return model, tokenizer
 
 
-def format_prompt(problem: str) -> str:
-    """Format a problem as a GRPO prompt (open-ended, no closing im_end)."""
-    return (
-        "<|im_start|>system\nYou are a helpful math assistant. "
-        "Think step by step inside <think> tags, then output your final "
-        "answer inside <answer> tags.\n<|im_end|>\n"
-        f"<|im_start|>user\n{problem}\n<|im_end|>\n"
-        "<|im_start|>assistant\n"
-    )
-
-
 def probe_dataset(
     model, tokenizer, dataset_name: str, split: str,
     problem_col: str, answer_col: str, n_samples: int,
     max_completion: int = 512,
+    debug_loop_file: str | None = None,
 ) -> dict:
-    """Single greedy-generation probe: T=0, check correctness via _check_answer.
+    """Single greedy-generation probe: T=0, check correctness + EOS-looping.
 
     Uses local JSONL from data/ when available, otherwise HF streaming."""
     from datasets import load_dataset
-    from data import _check_answer
     import re
 
     # Local JSONL shortcuts (same files committed to repo)
@@ -185,12 +234,15 @@ def probe_dataset(
         print(f"\n  Probing {n_samples} prompts from {dataset_name}...")
         token = os.environ.get("HF_TOKEN") or True
         ds = load_dataset(dataset_name, split=split, streaming=True, token=token)
+
     total = 0
     correct = 0
     format_ok = 0
     empty = 0
     errors = 0
+    looped = 0
     results = []
+    loop_debug_entries = [] if debug_loop_file else None
     t0 = time.time()
 
     for i, row in enumerate(ds):
@@ -202,7 +254,7 @@ def probe_dataset(
         if not problem or not ground_truth:
             continue
 
-        prompt = format_prompt(str(problem))
+        prompt = format_grpo_prompt(str(problem))
         try:
             inputs = tokenizer(prompt, return_tensors="pt",
                                truncation=True, max_length=256).to(model.device)
@@ -212,7 +264,7 @@ def probe_dataset(
                     **inputs,
                     max_new_tokens=max_completion,
                     do_sample=False,
-                    temperature=1.0,  # temperature ignored when do_sample=False
+                    temperature=1.0,
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                 )
@@ -222,72 +274,89 @@ def probe_dataset(
             )
         except Exception as e:
             errors += 1
-            results.append({"problem": str(problem)[:100], "completion": "", "error": str(e)})
+            results.append({"problem": str(problem)[:100], "error": str(e)})
             continue
 
         total += 1
+        stats = _completion_stats(completion, ground_truth)
 
-        if total % 10 == 0 or total == 1:
-            print(f"  [{total}/{n_samples}] acc={correct/total:.1%} fmt={format_ok/total:.1%}  "
-                  f"({time.time()-t0:.0f}s)", flush=True)
-
-        has_tags = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
-                   bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
-        if has_tags:
-            format_ok += 1
-
-        is_correct = _check_answer(completion, str(ground_truth))
-
-        if len(completion.strip()) == 0 or completion.strip() == "<|im_start|>assistant":
-            empty += 1
-
-        if is_correct:
+        if stats["correct"]:
             correct += 1
+        if stats["has_tags"]:
+            format_ok += 1
+        if stats["empty"]:
+            empty += 1
+        if stats["eos_loop"]:
+            looped += 1
 
-        results.append({
+        entry = {
             "problem": str(problem)[:150],
             "ground_truth": str(ground_truth)[:80],
-            "completion": completion[:300],
-            "has_tags": has_tags,
-            "correct": is_correct,
-        })
+            "completion": completion,  # full, not truncated
+            **stats,
+        }
+        results.append(entry)
+
+        if loop_debug_entries is not None and stats["eos_loop"]:
+            loop_debug_entries.append(entry)
+
+        if total % 10 == 0 or total == 1:
+            print(f"  [{total}/{n_samples}] acc={correct/total:.1%} "
+                  f"fmt={format_ok/total:.1%} loop={looped/total:.1%}  "
+                  f"({time.time()-t0:.0f}s)", flush=True)
 
         if total % 50 == 0:
             elapsed = time.time() - t0
-            rate = correct / total if total > 0 else 0
-            print(f"    {total}/{n_samples} | correct={correct:3d} ({rate:.1%}) | "
-                  f"format={format_ok} | empty={empty} | {elapsed:.0f}s")
+            print(f"    {total}/{n_samples} | correct={correct:3d} ({correct/total:.1%}) | "
+                  f"format={format_ok} | looped={looped} | empty={empty} | {elapsed:.0f}s")
 
     elapsed = time.time() - t0
     solve_rate = correct / total if total > 0 else 0.0
     format_rate = format_ok / total if total > 0 else 0.0
+    loop_rate = looped / total if total > 0 else 0.0
 
     print(f"    Done in {elapsed:.0f}s")
-    print(f"    Solve rate: {correct}/{total} = {solve_rate:.1%}")
+    print(f"    Solve rate:  {correct}/{total} = {solve_rate:.1%}")
     print(f"    Format rate: {format_ok}/{total} = {format_rate:.1%}")
+    print(f"    EOS-loop:    {looped}/{total} = {loop_rate:.1%}")
     print(f"    Empty: {empty}  Errors: {errors}")
 
-    return {
+    result = {
         "dataset": dataset_name,
         "samples_tested": total,
         "correct": correct,
         "solve_rate": solve_rate,
         "format_rate": format_rate,
+        "loop_rate": loop_rate,
+        "looped_count": looped,
         "empty": empty,
         "errors": errors,
         "elapsed_s": elapsed,
-        "results": results[:10],  # only include first 10 for report
+        "results": results,
     }
+
+    if loop_debug_entries is not None and len(loop_debug_entries) > 0:
+        os.makedirs(os.path.dirname(debug_loop_file), exist_ok=True)
+        with open(debug_loop_file, "w") as f:
+            json.dump({
+                "description": "Completions with EOS-looping (repetitive tag generation)",
+                "total_looped": len(loop_debug_entries),
+                "loop_rate": loop_rate,
+                "entries": loop_debug_entries,
+            }, f, indent=2)
+        print(f"    Looped completions dumped to: {debug_loop_file}")
+
+    return result
 
 
 def probe_dataset_vllm(
     merged_model_path: str, dataset_name: str, split: str,
     problem_col: str, answer_col: str, n_samples: int,
     max_completion: int = 256,
+    debug_loop_file: str | None = None,
 ) -> dict:
-    """vLLM-based probe: fast batch greedy generation (10-20x faster than HF)."""
+    """vLLM-based probe: fast batch greedy generation + EOS-looping detection."""
     from vllm import LLM, SamplingParams
-    from data import _check_answer
     import re, json
 
     print(f"\n  Loading vLLM model from {merged_model_path} ...")
@@ -321,7 +390,7 @@ def probe_dataset_vllm(
         a = row.get(answer_col, "")
         if not p or not a:
             continue
-        prompts.append(format_prompt(str(p)))
+        prompts.append(format_grpo_prompt(str(p)))
         answers.append(str(a))
 
     print(f"  Generating {len(prompts)} prompts via vLLM (max_tokens={max_completion}) ...")
@@ -334,46 +403,68 @@ def probe_dataset_vllm(
     format_ok = 0
     empty = 0
     errors = 0
+    looped = 0
     results = []
+    loop_debug_entries = [] if debug_loop_file else None
 
     for i, (prompt, answer, output) in enumerate(zip(prompts, answers, outputs)):
         completion = output.outputs[0].text
+        stats = _completion_stats(completion, answer)
 
-        has_tags = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
-                   bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
-        if has_tags:
-            format_ok += 1
-
-        is_correct = _check_answer(completion, answer)
-
-        if not completion.strip():
-            empty += 1
-
-        if is_correct:
+        if stats["correct"]:
             correct += 1
+        if stats["has_tags"]:
+            format_ok += 1
+        if stats["empty"]:
+            empty += 1
+        if stats["eos_loop"]:
+            looped += 1
 
-        if i < 10 or i % 50 == 0:
-            results.append({
-                "problem": prompt[:150],
-                "ground_truth": answer[:80],
-                "completion": completion[:300],
-                "has_tags": has_tags,
-                "correct": is_correct,
-            })
+        entry = {
+            "problem": prompt[:150],
+            "ground_truth": answer[:80],
+            "completion": completion,  # full
+            **stats,
+        }
+        results.append(entry)
+
+        if loop_debug_entries is not None and stats["eos_loop"]:
+            loop_debug_entries.append(entry)
 
     total = len(prompts)
+    solve_rate = correct / total if total > 0 else 0
+    format_rate = format_ok / total if total > 0 else 0
+    loop_rate = looped / total if total > 0 else 0
+
+    print(f"    Solve rate:  {correct}/{total} = {solve_rate:.1%}")
+    print(f"    Format rate: {format_ok}/{total} = {format_rate:.1%}")
+    print(f"    EOS-loop:    {looped}/{total} = {loop_rate:.1%}")
+
     r = {
         "dataset": dataset_name,
         "samples_tested": total,
         "correct": correct,
-        "solve_rate": correct / total if total > 0 else 0,
-        "format_rate": format_ok / total if total > 0 else 0,
+        "solve_rate": solve_rate,
+        "format_rate": format_rate,
+        "loop_rate": loop_rate,
+        "looped_count": looped,
         "empty": empty,
         "errors": errors,
         "elapsed_s": elapsed,
-        "results": results[:10],
+        "results": results,
     }
-    print(f"    solve_rate={r['solve_rate']:.1%}  format_rate={r['format_rate']:.1%}")
+
+    if loop_debug_entries is not None and len(loop_debug_entries) > 0:
+        os.makedirs(os.path.dirname(debug_loop_file), exist_ok=True)
+        with open(debug_loop_file, "w") as f:
+            json.dump({
+                "description": "Completions with EOS-looping (repetitive tag generation)",
+                "total_looped": len(loop_debug_entries),
+                "loop_rate": loop_rate,
+                "entries": loop_debug_entries,
+            }, f, indent=2)
+        print(f"    Looped completions dumped to: {debug_loop_file}")
+
     return r
 
 
@@ -387,8 +478,7 @@ def main():
         print("\n[PROBE] Dry-run done. Run without --dry-run to benchmark solve rates.")
         return
 
-    # ── Step 1: Inspect OpenMathInstruct-2 schema ───────────────
-    cols_om2 = inspect_dataset("nvidia/OpenMathInstruct-2", "train", 5)
+    debug_loop = args.debug_file or args.output.replace(".json", "_loops.json")
 
     # ── Try vLLM first (requires merged model) ──────────────────
     merged_path = os.path.join(args.sft_checkpoint, "merged")
@@ -411,10 +501,10 @@ def main():
             problem_col="problem",
             answer_col="expected_answer",
             n_samples=args.samples,
-            max_completion=256,
+            max_completion=args.max_completion,
+            debug_loop_file=debug_loop,
         )
     else:
-        # ── HF fallback ────────────────────────────────────────
         print(f"\n{'='*60}")
         print("LOADING MODEL (HF)")
         print(f"{'='*60}")
@@ -430,6 +520,8 @@ def main():
             problem_col="problem",
             answer_col="expected_answer",
             n_samples=args.samples,
+            max_completion=args.max_completion,
+            debug_loop_file=debug_loop,
         )
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -438,7 +530,10 @@ def main():
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "sft_checkpoint": args.sft_checkpoint,
         "samples_per_dataset": args.samples,
-        "config": {"G": 1, "T": "greedy", "max_completion": 256, "engine": "vLLM" if use_vllm else "HF"},
+        "config": {
+            "G": 1, "T": "greedy", "max_completion": args.max_completion,
+            "engine": "vLLM" if use_vllm else "HF",
+        },
         "openmath_instruct_2": om2_result,
     }
 
@@ -447,10 +542,17 @@ def main():
     print(f"Full report: {args.output}")
 
     # Terminal summary
-    print(f"\n{'Dataset':<30} {'Solve Rate':>12} {'Format Rate':>12}")
-    print("-" * 56)
-    for name, r in [("OpenMathInstruct-2", om2_result)]:
-        print(f"  {name:<28} {r['solve_rate']:>11.1%} {r['format_rate']:>11.1%}")
+    r = om2_result
+    print(f"\n{'Dataset':<30} {'Solve':>10} {'Format':>10} {'EOS-Loop':>10}")
+    print("-" * 62)
+    print(f"  {'OpenMathInstruct-2':<28} {r['solve_rate']:>9.1%} "
+          f"{r['format_rate']:>9.1%} {r.get('loop_rate', 0):>9.1%}")
+    print(f"\n  {r['samples_tested']} samples | {r['correct']} correct | "
+          f"{r.get('looped_count', 0)} looped | {r['elapsed_s']:.0f}s")
+
+    if r.get("loop_rate", 0) > 0.05:
+        print(f"\n  ⚠  EOS-looping detected in {r['loop_rate']:.1%} of completions!")
+        print(f"  This may suppress true solve rate. Check {debug_loop} for examples.")
 
     print(f"\nDone. Report saved to {args.output}")
 

@@ -19,7 +19,6 @@ import yaml
 import os
 import csv
 import json
-import re
 from datasets import load_dataset
 
 OUTPUT_DIR = "outputs/filter_tune"
@@ -43,86 +42,6 @@ def load_config(path: str) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
 
-
-def _normalize_str(s: str) -> str:
-    """Collapse whitespace and strip for string comparison."""
-    s = s.strip()
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-
-def _normalize_answer(raw: str) -> str:
-    """Normalize an answer string: strip LaTeX delimiters, normalize escapes."""
-    s = raw.strip()
-    # Strip LaTeX math delimiters: \( ... \), \[ ... \], $ ... $, $$ ... $$
-    s = re.sub(r"^\s*\\\(\s*", "", s)
-    s = re.sub(r"\s*\\\)\s*$", "", s)
-    s = re.sub(r"^\s*\\\[\s*", "", s)
-    s = re.sub(r"\s*\\\]\s*$", "", s)
-    s = re.sub(r"^\s*\$\$\s*", "", s)
-    s = re.sub(r"\s*\$\$\s*$", "", s)
-    s = re.sub(r"^\s*\$\s*", "", s)
-    s = re.sub(r"\s*\$\s*$", "", s)
-    # Collapse whitespace
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def check_answer(completion: str, ground_truth: str) -> bool:
-    """Check if a completion's <answer> tag matches the ground truth.
-
-    Handles: pure numeric, LaTeX (via sympy), equations, and multi-value
-    answers joined by \"or\".  Sympy is optional; falls back to string
-    comparison when not available.
-    """
-    match = re.search(r"<answer>(.*?)(?:</answer>|$)", completion, re.DOTALL)
-    if not match:
-        return False
-
-    predicted = _normalize_answer(match.group(1))
-    target = _normalize_answer(ground_truth)
-
-    # 1. Pure numeric comparison
-    try:
-        pred_num = float(predicted.replace(",", ""))
-        tgt_num = float(target.replace(",", ""))
-        if tgt_num == 0:
-            return abs(pred_num) < 1e-5
-        return abs(pred_num - tgt_num) / max(abs(tgt_num), 1e-6) < 1e-4
-    except (ValueError, TypeError):
-        pass
-
-    # 2. Sympy symbolic comparison (LaTeX / equations)
-    try:
-        from sympy.parsing.latex import parse_latex
-        from sympy import simplify, N
-        a_expr = parse_latex(predicted.replace(r"\text{ or }", ""))
-        b_expr = parse_latex(target.replace(r"\text{ or }", ""))
-        diff = simplify(a_expr - b_expr)
-        if diff == 0:
-            return True
-        if diff.is_number:
-            return abs(float(N(diff))) < 1e-4
-    except Exception:
-        pass
-
-    # 3. Normalized string comparison
-    if _normalize_str(predicted) == _normalize_str(target):
-        return True
-
-    # 4. \"or\"-separated answers — match any alternative
-    alt_sep = r"(?:\s+or\s+|\\text\{\s*or\s*\})"
-    if re.search(alt_sep, target):
-        alternatives = re.split(alt_sep, target)
-        for alt in alternatives:
-            alt = alt.strip()
-            if check_answer(f"<answer>{alt}</answer>", alt):
-                if check_answer(completion, alt):
-                    return True
-            elif _normalize_str(predicted) == _normalize_str(alt):
-                return True
-
-    return False
 
 
 def main():
@@ -157,7 +76,7 @@ def main():
     print(f"Loaded {len(samples)} samples")
 
     # ── Format prompts with chat template ───────────────────────
-    from data import format_grpo_prompt
+    from data import format_grpo_prompt, _check_answer
     prompts = [format_grpo_prompt(s["problem"]) for s in samples]
     answers = [s["answer"] for s in samples]
 
@@ -213,8 +132,8 @@ def main():
 
         for i, output in enumerate(outputs):
             completions = [c.text for c in output.outputs]
-            any_correct = any(check_answer(c, answers[i]) for c in completions)
-            num_correct = sum(1 for c in completions if check_answer(c, answers[i]))
+            any_correct = any(_check_answer(c, answers[i]) for c in completions)
+            num_correct = sum(1 for c in completions if _check_answer(c, answers[i]))
 
             results.append({
                 "idx": i,

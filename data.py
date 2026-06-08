@@ -157,7 +157,7 @@ def load_grpo_dataset(config: dict, max_samples: int = 2500) -> Dataset:
             break
 
         problem = row.get("problem", "")
-        answer = row.get("answer", "")
+        answer = row.get("answer") or row.get("expected_answer", "")
         if not problem or not answer:
             continue
 

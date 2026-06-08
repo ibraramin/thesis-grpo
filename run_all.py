@@ -36,8 +36,8 @@ def parse_args():
     parser.add_argument("--seeds", nargs="*", type=int, default=None,
                         help="Seeds to run (default: 0,1,2,3)")
     parser.add_argument("--skip-sft", action="store_true")
-    parser.add_argument("--steps", default=",".join(STEPS),
-                        help=f"Comma-separated steps to run: {STEPS}")
+    parser.add_argument("--steps", default=None,
+                        help=f"Comma-separated steps to run: {STEPS} (default: all)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--output", default="outputs")
     parser.add_argument("--test-run", action="store_true",
@@ -84,7 +84,7 @@ def main():
 
     cohort_names = args.cohorts or list(cohorts_cfg.keys())
     seeds = args.seeds or list(range(num_seeds))
-    steps = [s.strip() for s in args.steps.split(",")]
+    steps = [s.strip() for s in (args.steps or ",".join(STEPS)).split(",")]
 
     # ── Test-run bootstrapping ──────────────────────────────────
     test_run = args.test_run
@@ -93,7 +93,8 @@ def main():
         args.output = tr.get("output_dir", "outputs/test_run")
         seeds = [0]
         num_seeds = 1
-        steps = STEPS  # Run all steps
+        if args.steps is None:
+            steps = STEPS  # Default to all steps for test-run
         # Write a temp config with test overrides for subprocesses
         test_config_path = os.path.join(args.output, "_config.yaml")
         os.makedirs(args.output, exist_ok=True)

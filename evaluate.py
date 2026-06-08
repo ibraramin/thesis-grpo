@@ -58,6 +58,15 @@ def _load_local_jsonl(path: str, max_samples: int | None = None) -> list[dict]:
     return rows
 
 
+def _normalize_local_row(row: dict, b_info: dict) -> dict:
+    """Remap local JSONL keys (always 'problem'/'answer') to HF column names."""
+    if "problem" in row and b_info["problem_col"] != "problem":
+        row[b_info["problem_col"]] = row.pop("problem")
+    if "answer" in row and b_info["answer_col"] != "answer":
+        row[b_info["answer_col"]] = row.pop("answer")
+    return row
+
+
 def _load_benchmark_rows(bench_name: str, max_samples: int | None = None):
     """Load benchmark data — local JSONL first, HF streaming fallback."""
     local_paths = {
@@ -69,6 +78,7 @@ def _load_benchmark_rows(bench_name: str, max_samples: int | None = None):
     if local_path and os.path.exists(local_path):
         rows = _load_local_jsonl(local_path, max_samples)
         if rows:
+            rows = [_normalize_local_row(r, b) for r in rows]
             print(f"    Loaded {len(rows)} samples from local: {local_path}")
             return rows, b
 
