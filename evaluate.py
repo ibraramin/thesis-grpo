@@ -14,6 +14,7 @@ import os
 import json
 import re
 import csv
+import time
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
@@ -193,42 +194,138 @@ def _resolve_model_path(model_name: str, sft_merged: str | None = None) -> tuple
     return model_name, False
 
 
+def _merge_ckpt_for_vllm(ckpt_path: str, base_model_path: str | None = None) -> str:
+    """Merge LoRA adapter into base model, return path to merged model directory.
+
+    If ckpt_path has a 'merged/' subdirectory (SFT checkpoint), returns that directly.
+    Otherwise merges base model + LoRA adapter and saves to ckpt_path/merged_vllm/.
+    """
+    merged_dir = os.path.join(ckpt_path, "merged")
+    if os.path.isdir(merged_dir) and os.path.exists(os.path.join(merged_dir, "model.safetensors")):
+        return merged_dir
+
+    vllm_dir = os.path.join(ckpt_path, "merged_vllm")
+    if os.path.isdir(vllm_dir) and os.path.exists(os.path.join(vllm_dir, "model.safetensors")):
+        return vllm_dir
+
+    print(f"    Merging LoRA adapter for vLLM evaluation...")
+    from transformers import AutoModelForCausalLM
+    from peft import PeftModel
+
+    # Use SFT merged checkpoint as base (always available, fully loaded)
+    sft_merged = "outputs/sft_checkpoint/merged"
+    model_path = sft_merged
+    if not (os.path.isdir(model_path) and os.path.exists(os.path.join(model_path, "model.safetensors"))):
+        model_path = base_model_path or _resolve_model_path("Qwen/Qwen2.5-1.5B")[0]
+
+    base = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=torch.bfloat16, device_map="auto",
+        local_files_only=True,
+    )
+    model = PeftModel.from_pretrained(base, ckpt_path)
+    merged = model.merge_and_unload()
+    merged.save_pretrained(vllm_dir)
+    tokenizer = get_tokenizer("Qwen/Qwen2.5-1.5B")
+    tokenizer.save_pretrained(vllm_dir)
+    del merged, model, base
+    torch.cuda.empty_cache()
+    print(f"    Merged model saved to: {vllm_dir}")
+    return vllm_dir
+
+
+def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
+                          max_samples: int | None, max_new_tokens: int,
+                          test_log_lines: list[str] | None) -> dict:
+    """Evaluate a single benchmark via vLLM batch generation."""
+    from vllm import LLM, SamplingParams
+    import re, json
+
+    b = BENCHMARKS[bench_name]
+    rows, b_info = _load_benchmark_rows(bench_name, max_samples)
+
+    print(f"    vLLM: batch-generating {len(rows)} prompts...")
+    llm = LLM(model=vllm_model_path, trust_remote_code=True, gpu_memory_utilization=0.85)
+    sampling_params = SamplingParams(temperature=0, max_tokens=max_new_tokens)
+
+    prompts = []
+    answers = []
+    for row in rows:
+        problem = row[b_info["problem_col"]]
+        ground_truth = row[b_info["answer_col"]]
+        prompts.append(format_grpo_prompt(problem))
+        answers.append(ground_truth)
+
+    t0 = time.time()
+    outputs = llm.generate(prompts, sampling_params)
+
+    correct = 0
+    total = 0
+    format_ok = 0
+    total_length = 0
+
+    for i, (output, answer) in enumerate(zip(outputs, answers)):
+        completion = output.outputs[0].text
+        predicted = _extract_answer(completion)
+        has_format = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
+                     bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
+        is_correct = predicted is not None and answers_match(str(predicted), str(answer))
+
+        total += 1
+        total_length += len(completion.split())
+        if has_format:
+            format_ok += 1
+        if is_correct:
+            correct += 1
+
+        if test_log_lines is not None:
+            test_log_lines.append(
+                f"    [{bench_name} #{i}] problem: {prompts[i][:80]}...\n"
+                f"      predicted={predicted}, truth={answer}, "
+                f"correct={'✓' if is_correct else '✗'}, "
+                f"format={'✓' if has_format else '✗'}\n"
+            )
+
+    elapsed = time.time() - t0
+    del llm
+    torch.cuda.empty_cache()
+
+    accuracy = correct / total if total > 0 else 0.0
+    format_rate = format_ok / total if total > 0 else 0.0
+    avg_length = total_length / total if total > 0 else 0.0
+
+    print(f"    Accuracy: {accuracy:.4f} ({correct}/{total})")
+    print(f"    Format:   {format_rate:.4f}")
+    print(f"    Avg len:  {avg_length:.1f} tokens")
+    print(f"    Time:     {elapsed:.1f}s")
+
+    return {
+        f"{bench_name}_accuracy": accuracy,
+        f"{bench_name}_format_rate": format_rate,
+        f"{bench_name}_avg_length": avg_length,
+    }
+
+
 def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict,
                         eval_cfg: dict, max_samples: int | None = None,
                         test_log_lines: list[str] | None = None,
                         sft_merged_path: str | None = None) -> dict:
-    """
-    Evaluate a single checkpoint on selected benchmarks.
-    Returns a dict of metrics.
-    If test_log_lines is provided, appends per-sample results for test-run reporting.
-    """
+    """Evaluate a single checkpoint. Uses vLLM when available, HF fallback."""
+
     ckpt_path = checkpoint["path"]
-    merged_path = os.path.join(ckpt_path, "merged")
-    if not os.path.exists(merged_path):
-        merged_path = ckpt_path  # fallback: evaluate from adapter directly
+    print(f"  Evaluating: {checkpoint['cohort']}/seed_{checkpoint['seed']}")
 
-    print(f"  Loading model from: {ckpt_path}")
-
-    from transformers import AutoModelForCausalLM
-    from peft import PeftModel
-
-    tokenizer = get_tokenizer(model_cfg["name"])
-
-    # Load base model — prefer local cache to avoid slow download
-    model_path, is_local = _resolve_model_path(model_cfg["name"], sft_merged_path)
-    if is_local:
-        print(f"    Using local model: {model_path}")
-
-    base_model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        local_files_only=is_local,
-    )
-    model = PeftModel.from_pretrained(base_model, ckpt_path)
-    model.eval()
+    vllm_model_path = None
+    use_vllm = False
+    try:
+        from vllm import LLM
+        vllm_model_path = _merge_ckpt_for_vllm(ckpt_path)
+        use_vllm = True
+    except Exception as e:
+        print(f"    vLLM unavailable ({e}), falling back to sequential generation")
 
     results = {}
+    max_new_tokens = eval_cfg.get("max_new_tokens", 512)
+
     for bench_name in benchmarks:
         if bench_name not in BENCHMARKS:
             print(f"  Unknown benchmark: {bench_name}")
@@ -236,6 +333,33 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
 
         b = BENCHMARKS[bench_name]
         print(f"  Benchmark: {bench_name} ({b['dataset']})")
+
+        if use_vllm:
+            bench_results = _eval_benchmark_vllm(
+                vllm_model_path, bench_name, max_samples,
+                max_new_tokens, test_log_lines,
+            )
+            results.update(bench_results)
+            continue
+
+        # ── HF sequential fallback ───────────────────────────
+        from transformers import AutoModelForCausalLM
+        from peft import PeftModel
+
+        tokenizer = get_tokenizer(model_cfg["name"])
+
+        model_path, is_local = _resolve_model_path(model_cfg["name"], sft_merged_path)
+        if is_local:
+            print(f"    Using local model: {model_path}")
+
+        base_model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            local_files_only=is_local,
+        )
+        model = PeftModel.from_pretrained(base_model, ckpt_path)
+        model.eval()
 
         rows, b_info = _load_benchmark_rows(bench_name, max_samples)
 
@@ -250,13 +374,13 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
 
             prompt = format_grpo_prompt(problem)
             inputs = tokenizer(prompt, return_tensors="pt",
-                              truncation=True, max_length=256).to(model.device)
+                               truncation=True, max_length=256).to(model.device)
 
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=eval_cfg.get("max_new_tokens", 512),
-                    do_sample=False,  # greedy
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                 )
@@ -265,13 +389,11 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
                 outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True
             )
 
-            # Parse answer
             predicted = _extract_answer(completion)
             has_format = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
                          bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
             is_correct = predicted is not None and answers_match(str(predicted), str(ground_truth))
 
-            # ── Test-run: log per-sample results ─────────────────
             if test_log_lines is not None:
                 test_log_lines.append(
                     f"    [{bench_name} #{i}] problem: {problem[:80]}...\n"
@@ -300,10 +422,9 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
         print(f"    Format:   {format_rate:.4f}")
         print(f"    Avg len:  {avg_length:.1f} tokens")
 
-    # Clean up
-    del model
-    del base_model
-    torch.cuda.empty_cache()
+        del model
+        del base_model
+        torch.cuda.empty_cache()
 
     return results
 
