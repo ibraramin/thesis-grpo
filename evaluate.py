@@ -167,9 +167,35 @@ def answers_match(predicted: str, ground_truth: str) -> bool:
     return False
 
 
+def _resolve_model_path(model_name: str, sft_merged: str | None = None) -> str:
+    """Find local model path: cached HF, ModelScope, or SFT merged checkpoint."""
+    from huggingface_hub import try_to_load_from_cache
+
+    # 1. Check HF cache (exact and ModelScope-style lowercase)
+    for cid in [model_name, model_name.lower()]:
+        if try_to_load_from_cache(cid, "config.json"):
+            return cid
+
+    # 2. Scan HF cache directory for matching model
+    import glob
+    name = model_name.split("/")[-1]
+    for d in glob.glob(os.path.expanduser(f"~/.cache/huggingface/hub/models--*{name}*")):
+        inner = os.path.basename(d).replace("models--", "").replace("--", "/")
+        if try_to_load_from_cache(inner, "config.json"):
+            return inner
+
+    # 3. Fall back to SFT merged checkpoint (has full model files)
+    if sft_merged and os.path.isdir(sft_merged) and os.path.exists(os.path.join(sft_merged, "config.json")):
+        return sft_merged
+
+    # 4. Last resort: original name (will download)
+    return model_name
+
+
 def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict,
                         eval_cfg: dict, max_samples: int | None = None,
-                        test_log_lines: list[str] | None = None) -> dict:
+                        test_log_lines: list[str] | None = None,
+                        sft_merged_path: str | None = None) -> dict:
     """
     Evaluate a single checkpoint on selected benchmarks.
     Returns a dict of metrics.
@@ -187,11 +213,17 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
 
     tokenizer = get_tokenizer(model_cfg["name"])
 
-    # Load base model with the checkpoint's adapter
+    # Load base model — prefer local cache to avoid slow download
+    model_path = _resolve_model_path(model_cfg["name"], sft_merged_path)
+    local_only = model_path != model_cfg["name"]
+    if local_only:
+        print(f"    Using local model: {model_path}")
+
     base_model = AutoModelForCausalLM.from_pretrained(
-        model_cfg["name"],
+        model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
+        local_files_only=local_only,
     )
     model = PeftModel.from_pretrained(base_model, ckpt_path)
     model.eval()
@@ -305,6 +337,8 @@ def main():
     checkpoints = find_checkpoints(args.checkpoints_root, cohort_names, seeds)
     print(f"Found {len(checkpoints)} checkpoints")
 
+    sft_merged = os.path.join(args.checkpoints_root, "sft_checkpoint", "merged")
+
     if args.dry_run:
         for ckpt in checkpoints:
             print(f"  {ckpt['cohort']}/seed_{ckpt['seed']} → {ckpt['path']}")
@@ -320,7 +354,8 @@ def main():
         print(f"\n[{i+1}/{len(checkpoints)}] {ckpt['cohort']}/seed_{ckpt['seed']}")
         try:
             metrics = evaluate_checkpoint(ckpt, benchmarks, model_cfg, eval_cfg, args.max_samples,
-                                          test_log_lines if test_run else None)
+                                           test_log_lines if test_run else None,
+                                           sft_merged_path=sft_merged)
             row = {"cohort": ckpt["cohort"], "seed": ckpt["seed"], **metrics}
         except Exception as e:
             print(f"  ERROR: {e}")
