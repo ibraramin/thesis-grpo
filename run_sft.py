@@ -27,6 +27,33 @@ OUTPUT_DIR = "outputs/sft_checkpoint"
 RESUME_MARKER = ".resume_marker"
 
 
+def _resolve_local_model(model_name: str) -> str:
+    """Find locally cached model: HF, ModelScope, or return original for download."""
+    from huggingface_hub import try_to_load_from_cache
+
+    # 1. HF cache with safetensors
+    for cid in [model_name, model_name.lower()]:
+        if try_to_load_from_cache(cid, "model.safetensors"):
+            return cid
+
+    # 2. ModelScope cache (common on Chinese instances)
+    import glob
+    ms_hub = os.path.expanduser("~/.cache/modelscope/hub")
+    name_short = model_name.split("/")[-1]
+    for d in glob.glob(os.path.join(ms_hub, f"*{name_short}*")):
+        if os.path.isdir(d) and os.path.exists(os.path.join(d, "model.safetensors")):
+            return d
+
+    # 3. Scan HF cache directory
+    for d in glob.glob(os.path.expanduser(f"~/.cache/huggingface/hub/models--*{name_short}*")):
+        inner = os.path.basename(d).replace("models--", "").replace("--", "/")
+        if try_to_load_from_cache(inner, "model.safetensors"):
+            return inner
+
+    # 4. Fall back — will download
+    return model_name
+
+
 def find_latest_checkpoint(output_dir: str) -> str | None:
     """Find the latest checkpoint subdirectory under output_dir.
     
@@ -121,8 +148,11 @@ def main():
     print("[SFT] Tokenizing...")
     dataset = tokenize_sft(dataset, tokenizer, max_seq_length=sft_cfg["max_seq_length"])
 
+    # ── Resolve local model path to avoid slow download ──────────
+    model_path = _resolve_local_model(model_cfg["name"])
+
     # ── Model Loading ───────────────────────────────────────────
-    print(f"[SFT] Loading model: {model_cfg['name']} (4-bit)")
+    print(f"[SFT] Loading model: {model_path} (4-bit)")
 
     if torch.cuda.is_available():
         print(f"[SFT] GPU: {torch.cuda.get_device_name(0)} "
@@ -149,7 +179,7 @@ def main():
 
     if USE_UNSLOTH:
         model, _ = FastLanguageModel.from_pretrained(
-            model_name=model_cfg["name"],
+            model_name=model_path,
             max_seq_length=sft_cfg["max_seq_length"],
             load_in_4bit=model_cfg["load_in_4bit"],
             fast_inference=False,
@@ -174,7 +204,7 @@ def main():
             bnb_4bit_use_double_quant=True,
         )
         model = AutoModelForCausalLM.from_pretrained(
-            model_cfg["name"],
+            model_path,
             quantization_config=bnb_config if model_cfg["load_in_4bit"] else None,
             torch_dtype=torch.bfloat16,
             device_map="auto",
