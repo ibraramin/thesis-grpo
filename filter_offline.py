@@ -107,7 +107,9 @@ def main():
     total = 0
     correct_prompts = 0
 
-    for batch_start in tqdm(range(0, len(rows), args.batch_size),
+    total_batches = (len(rows) + args.batch_size - 1) // args.batch_size
+
+    for batch_start in tqdm(range(0, len(rows), args.batch_size), total=total_batches,
                              desc="Filtering", unit="batch"):
         batch = rows[batch_start:batch_start + args.batch_size]
         prompts = [format_grpo_prompt(e["problem"]) for e in batch]
