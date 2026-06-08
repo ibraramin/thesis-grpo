@@ -20,6 +20,10 @@ import argparse
 import json
 import os
 import sys
+from contextlib import redirect_stderr, redirect_stdout
+
+# Suppress vLLM's verbose progress bars for cleaner filter output
+os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
 
 import yaml
 from tqdm import tqdm
@@ -116,7 +120,8 @@ def main():
         answers = [e["answer"] for e in batch]
 
         # Generate G completions per prompt in one vLLM call
-        outputs = llm.generate(prompts, sampling_params)
+        with open(os.devnull, "w") as f, redirect_stdout(f), redirect_stderr(f):
+            outputs = llm.generate(prompts, sampling_params)
 
         for i, (prompt, answer) in enumerate(zip(prompts, answers)):
             total += 1
