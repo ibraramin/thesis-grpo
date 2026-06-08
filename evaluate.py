@@ -19,7 +19,7 @@ import torch
 from datasets import load_dataset
 from tqdm import tqdm
 
-from data import format_grpo_prompt, get_tokenizer
+from data import format_grpo_prompt, format_few_shot_prompt, get_tokenizer
 from rewards import _extract_answer
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -277,7 +277,8 @@ def _extract_last_number(text: str) -> float | None:
 
 def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
                           max_samples: int | None, max_new_tokens: int,
-                          test_log_lines: list[str] | None) -> dict:
+                          test_log_lines: list[str] | None,
+                          few_shot: bool = False) -> dict:
     """Evaluate a single benchmark via vLLM batch generation."""
     from vllm import LLM, SamplingParams
     import re, json
@@ -285,18 +286,19 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
     b = BENCHMARKS[bench_name]
     rows, b_info = _load_benchmark_rows(bench_name, max_samples)
 
-    print(f"    vLLM: batch-generating {len(rows)} prompts...")
+    print(f"    vLLM: batch-generating {len(rows)} prompts{' (few-shot)' if few_shot else ''}...")
     torch.cuda.empty_cache()
     llm = LLM(model=vllm_model_path, trust_remote_code=True,
-              gpu_memory_utilization=0.5)  # lower for eval alongside other processes
+              gpu_memory_utilization=0.5)
     sampling_params = SamplingParams(temperature=0, max_tokens=max_new_tokens)
 
+    prompt_fn = format_few_shot_prompt if few_shot else format_grpo_prompt
     prompts = []
     answers = []
     for row in rows:
         problem = row[b_info["problem_col"]]
         ground_truth = row[b_info["answer_col"]]
-        prompts.append(format_grpo_prompt(problem))
+        prompts.append(prompt_fn(problem))
         answers.append(ground_truth)
 
     t0 = time.time()
@@ -384,12 +386,13 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
             continue
 
         b = BENCHMARKS[bench_name]
-        print(f"  Benchmark: {bench_name} ({b['dataset']})")
+        few_shot = bench_name in ("gsm8k", "svamp")  # standard protocol for these
+        print(f"  Benchmark: {bench_name} ({b['dataset']}){' [few-shot]' if few_shot else ''}")
 
         if use_vllm:
             bench_results = _eval_benchmark_vllm(
                 vllm_model_path, bench_name, max_samples,
-                max_new_tokens, test_log_lines,
+                max_new_tokens, test_log_lines, few_shot=few_shot,
             )
             results.update(bench_results)
             continue
@@ -421,11 +424,13 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
         correct_lenient = 0
         total_length = 0
 
+        prompt_fn = format_few_shot_prompt if few_shot else format_grpo_prompt
+
         for i, row in enumerate(rows):
             problem = row[b_info["problem_col"]]
             ground_truth = row[b_info["answer_col"]]
 
-            prompt = format_grpo_prompt(problem)
+            prompt = prompt_fn(problem)
             inputs = tokenizer(prompt, return_tensors="pt",
                                truncation=True, max_length=256).to(model.device)
 
