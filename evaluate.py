@@ -19,7 +19,7 @@ import torch
 from datasets import load_dataset
 from tqdm import tqdm
 
-from data import format_grpo_prompt, format_few_shot_prompt, get_tokenizer
+from data import format_grpo_prompt, get_tokenizer
 from rewards import _extract_answer
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -259,26 +259,9 @@ def normalize_answer(text: str) -> str:
     return text
 
 
-def _extract_last_number(text: str) -> float | None:
-    """Extract the last number from a completion — no XML tag requirement.
-
-    This is what published benchmarks (GSM8k, MATH) use — lenient extraction
-    that matches the standard evaluation protocol. Returns None if no number found.
-    """
-    # Find all numbers in the text (including negatives, decimals, LaTeX fractions)
-    numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
-    if not numbers:
-        return None
-    try:
-        return float(numbers[-1])
-    except (ValueError, TypeError):
-        return None
-
-
 def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
                           max_samples: int | None, max_new_tokens: int,
-                          test_log_lines: list[str] | None,
-                          few_shot: bool = False) -> dict:
+                          test_log_lines: list[str] | None) -> dict:
     """Evaluate a single benchmark via vLLM batch generation."""
     from vllm import LLM, SamplingParams
     import re, json
@@ -286,19 +269,18 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
     b = BENCHMARKS[bench_name]
     rows, b_info = _load_benchmark_rows(bench_name, max_samples)
 
-    print(f"    vLLM: batch-generating {len(rows)} prompts{' (few-shot)' if few_shot else ''}...")
+    print(f"    vLLM: batch-generating {len(rows)} prompts...")
     torch.cuda.empty_cache()
     llm = LLM(model=vllm_model_path, trust_remote_code=True,
               gpu_memory_utilization=0.5)
     sampling_params = SamplingParams(temperature=0, max_tokens=max_new_tokens)
 
-    prompt_fn = format_few_shot_prompt if few_shot else format_grpo_prompt
     prompts = []
     answers = []
     for row in rows:
         problem = row[b_info["problem_col"]]
         ground_truth = row[b_info["answer_col"]]
-        prompts.append(prompt_fn(problem))
+        prompts.append(format_grpo_prompt(problem))
         answers.append(ground_truth)
 
     t0 = time.time()
@@ -307,17 +289,14 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
     correct = 0
     total = 0
     format_ok = 0
-    correct_lenient = 0
     total_length = 0
 
     for i, (output, answer) in enumerate(zip(outputs, answers)):
         completion = output.outputs[0].text
         predicted = _extract_answer(completion)
-        predicted_lenient = _extract_last_number(completion)
         has_format = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
                      bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
         is_correct = predicted is not None and answers_match(str(predicted), str(answer))
-        is_correct_lenient = predicted_lenient is not None and answers_match(str(predicted_lenient), str(answer))
 
         total += 1
         total_length += len(completion.split())
@@ -325,8 +304,6 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
             format_ok += 1
         if is_correct:
             correct += 1
-        if is_correct_lenient:
-            correct_lenient += 1
 
         if test_log_lines is not None:
             test_log_lines.append(
@@ -341,19 +318,16 @@ def _eval_benchmark_vllm(vllm_model_path: str, bench_name: str,
     torch.cuda.empty_cache()
 
     accuracy = correct / total if total > 0 else 0.0
-    accuracy_lenient = correct_lenient / total if total > 0 else 0.0
     format_rate = format_ok / total if total > 0 else 0.0
     avg_length = total_length / total if total > 0 else 0.0
 
-    print(f"    Strict (XML):  {accuracy:.4f} ({correct}/{total})")
-    print(f"    Lenient (num): {accuracy_lenient:.4f} ({correct_lenient}/{total})")
-    print(f"    Format:        {format_rate:.4f}")
-    print(f"    Avg len:       {avg_length:.1f} tokens")
-    print(f"    Time:          {elapsed:.1f}s")
+    print(f"    Accuracy: {accuracy:.4f} ({correct}/{total})")
+    print(f"    Format:   {format_rate:.4f}")
+    print(f"    Avg len:  {avg_length:.1f} tokens")
+    print(f"    Time:     {elapsed:.1f}s")
 
     return {
         f"{bench_name}_accuracy": accuracy,
-        f"{bench_name}_accuracy_lenient": accuracy_lenient,
         f"{bench_name}_format_rate": format_rate,
         f"{bench_name}_avg_length": avg_length,
     }
@@ -386,13 +360,12 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
             continue
 
         b = BENCHMARKS[bench_name]
-        few_shot = bench_name in ("gsm8k", "svamp")  # standard protocol for these
-        print(f"  Benchmark: {bench_name} ({b['dataset']}){' [few-shot]' if few_shot else ''}")
+        print(f"  Benchmark: {bench_name} ({b['dataset']})")
 
         if use_vllm:
             bench_results = _eval_benchmark_vllm(
                 vllm_model_path, bench_name, max_samples,
-                max_new_tokens, test_log_lines, few_shot=few_shot,
+                max_new_tokens, test_log_lines,
             )
             results.update(bench_results)
             continue
@@ -421,16 +394,13 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
         correct = 0
         total = 0
         format_ok = 0
-        correct_lenient = 0
         total_length = 0
-
-        prompt_fn = format_few_shot_prompt if few_shot else format_grpo_prompt
 
         for i, row in enumerate(rows):
             problem = row[b_info["problem_col"]]
             ground_truth = row[b_info["answer_col"]]
 
-            prompt = prompt_fn(problem)
+            prompt = format_grpo_prompt(problem)
             inputs = tokenizer(prompt, return_tensors="pt",
                                truncation=True, max_length=256).to(model.device)
 
@@ -448,11 +418,9 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
             )
 
             predicted = _extract_answer(completion)
-            predicted_lenient = _extract_last_number(completion)
             has_format = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL)) and \
                          bool(re.search(r"<answer>.*?</answer>", completion, re.DOTALL))
             is_correct = predicted is not None and answers_match(str(predicted), str(ground_truth))
-            is_correct_lenient = predicted_lenient is not None and answers_match(str(predicted_lenient), str(ground_truth))
 
             if test_log_lines is not None:
                 test_log_lines.append(
@@ -469,23 +437,18 @@ def evaluate_checkpoint(checkpoint: dict, benchmarks: list[str], model_cfg: dict
                 format_ok += 1
             if is_correct:
                 correct += 1
-            if is_correct_lenient:
-                correct_lenient += 1
 
         accuracy = correct / total if total > 0 else 0.0
-        accuracy_lenient = correct_lenient / total if total > 0 else 0.0
         format_rate = format_ok / total if total > 0 else 0.0
         avg_length = total_length / total if total > 0 else 0.0
 
         results[f"{bench_name}_accuracy"] = accuracy
-        results[f"{bench_name}_accuracy_lenient"] = accuracy_lenient
         results[f"{bench_name}_format_rate"] = format_rate
         results[f"{bench_name}_avg_length"] = avg_length
 
-        print(f"    Strict (XML):  {accuracy:.4f} ({correct}/{total})")
-        print(f"    Lenient (num): {accuracy_lenient:.4f} ({correct_lenient}/{total})")
-        print(f"    Format:        {format_rate:.4f}")
-        print(f"    Avg len:       {avg_length:.1f} tokens")
+        print(f"    Accuracy: {accuracy:.4f} ({correct}/{total})")
+        print(f"    Format:   {format_rate:.4f}")
+        print(f"    Avg len:  {avg_length:.1f} tokens")
 
         del model
         del base_model

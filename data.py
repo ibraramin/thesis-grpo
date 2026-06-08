@@ -48,48 +48,6 @@ def format_grpo_prompt(problem: str) -> str:
     return QWEN_PROMPT_TEMPLATE.format(problem=problem)
 
 
-# ── Few-Shot Prompting (§Evaluation) ────────────────────────────
-
-FEW_SHOT_EXAMPLES = """\
-<|im_start|>user
-Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?<|im_end|>
-<|im_start|>assistant
-<think>Janet's ducks lay 16 eggs/day. She eats 3 + uses 4 for muffins = 7 used. Remaining: 16 - 7 = 9 eggs sold. At $2 each: 9 × $2 = $18.</think>
-<answer>18</answer><|im_end|>
-<|im_start|>user
-A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts in total does it take?<|im_end|>
-<|im_start|>assistant
-<think>Blue fiber: 2 bolts. White fiber: half of 2 = 1 bolt. Total: 2 + 1 = 3 bolts.</think>
-<answer>3</answer><|im_end|>
-<|im_start|>user
-Josh decides to try flipping a house. He buys a house for $80,000 and then puts in $50,000 in repairs. This increased the value of the house by 150%. How much profit did he make?<|im_end|>
-<|im_start|>assistant
-<think>Total cost: $80,000 + $50,000 = $130,000. Value increase: 150% of $80,000 = $120,000. New value: $80,000 + $120,000 = $200,000. Profit: $200,000 - $130,000 = $70,000.</think>
-<answer>70000</answer><|im_end|>
-<|im_start|>user
-James writes a 3-page letter to 2 different friends twice a week. How many pages does he write a year?<|im_end|>
-<|im_start|>assistant
-<think>Per mailing: 3 pages × 2 friends = 6 pages. Per week: 2 mailings × 6 pages = 12 pages. Per year: 52 weeks × 12 pages = 624 pages.</think>
-<answer>624</answer><|im_end|>
-<|im_start|>user
-Mark has a garden with flowers. He planted plants of three different colors in it. Ten of them are yellow, and there are 80% more of those in purple. There are only 25% as many green flowers as yellow and purple flowers. How many flowers does Mark have in his garden?<|im_end|>
-<|im_start|>assistant
-<think>Yellow: 10. Purple: 10 × 1.80 = 18. Green: 25% of (10 + 18) = 0.25 × 28 = 7. Total: 10 + 18 + 7 = 35.</think>
-<answer>35</answer><|im_end|>
-<|im_start|>user
-{problem}<|im_end|>
-<|im_start|>assistant
-"""
-
-
-def format_few_shot_prompt(problem: str) -> str:
-    """Format a problem with 5 few-shot examples using <think>/<answer> format."""
-    system_msg = """<|im_start|>system
-You are a helpful mathematical reasoning assistant. Always structure your answer by placing your step-by-step reasoning inside <think></think> tags, and your final answer inside <answer></answer> tags.<|im_end|>
-"""
-    return system_msg + FEW_SHOT_EXAMPLES.format(problem=problem)
-
-
 # ── SFT Dataset ────────────────────────────────────────────────
 
 def load_sft_dataset(config: dict, max_samples: int = 5000) -> Dataset:
