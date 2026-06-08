@@ -37,6 +37,8 @@ def parse_args():
     parser.add_argument("--prompts", type=int, default=30000)
     parser.add_argument("--g", type=int, default=4, help="Generations per prompt")
     parser.add_argument("--max-tokens", type=int, default=512)
+    parser.add_argument("--batch-size", type=int, default=32,
+                        help="Prompts per vLLM call (larger = faster)")
     parser.add_argument("--output", default="outputs/filtered_grpo/filtered_dataset.jsonl")
     return parser.parse_args()
 
@@ -105,20 +107,21 @@ def main():
     total = 0
     correct_prompts = 0
 
-    for entry in tqdm(rows, desc="Filtering", unit="prompts"):
-        total += 1
-        prompt_str = format_grpo_prompt(entry["problem"])
+    for batch_start in tqdm(range(0, len(rows), args.batch_size),
+                             desc="Filtering", unit="batch"):
+        batch = rows[batch_start:batch_start + args.batch_size]
+        prompts = [format_grpo_prompt(e["problem"]) for e in batch]
+        answers = [e["answer"] for e in batch]
 
-        # Generate G completions
-        outputs = llm.generate([prompt_str], sampling_params)
-        completions = [o.text for o in outputs[0].outputs]
+        # Generate G completions per prompt in one vLLM call
+        outputs = llm.generate(prompts, sampling_params)
 
-        # Check if any completion matches the ground truth
-        any_correct = any(_check_answer(comp, entry["answer"]) for comp in completions)
-
-        if any_correct:
-            kept.append({"prompt": prompt_str, "answer": entry["answer"]})
-            correct_prompts += 1
+        for i, (prompt, answer) in enumerate(zip(prompts, answers)):
+            total += 1
+            completions = [o.text for o in outputs[i].outputs]
+            if any(_check_answer(comp, answer) for comp in completions):
+                kept.append({"prompt": prompt, "answer": answer})
+                correct_prompts += 1
 
     # ── Save ────────────────────────────────────────────────────
     with open(args.output, "w") as f:
