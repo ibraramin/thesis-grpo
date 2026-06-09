@@ -53,6 +53,7 @@ python data/download_datasets.py --sft-samples 5000       # re-download datasets
 - **`trl>=1.0.0,<1.1.0`** — `GRPOConfig`, `GRPOTrainer`, and K3 KL are native in 1.0.0. Later versions removed `ConstantLengthDataset` and changed trainer APIs. Do not upgrade without verifying.
 - **`vllm>=0.10.2,<0.18.0`** — API surface changes rapidly across minor versions. `LLM.generate()` signature and `SamplingParams` are version-sensitive.
 - **`unsloth>=2024.11.0`** — optional; code falls back to `transformers + bitsandbytes + peft` when Unsloth is unavailable.
+- **`peft>=0.14,<0.15`** + **`transformers>=4.46`** — needed for checkpoint resume to work (avoids `EmbeddingParallel` import error).
 
 ## Resume / idempotency
 
@@ -67,20 +68,22 @@ When you want to force re-run, delete the output directory or the `.resume_marke
 ## Data: offline-first
 
 All datasets are pre-downloaded to `data/`:
-- `openr1_math_220k_sft.jsonl.gz` — SFT (5K samples)
+- `openr1_math_220k_sft.jsonl.gz` — SFT (5K samples, 10K after re-download)
 - `openmath_instruct_2_grpo.jsonl` — GRPO (50K samples)
 - `math500_eval.jsonl` — MATH-500 eval
 - `aime24_eval.jsonl` — AIME24 eval
+- `gsm8k_eval.jsonl` — GSM8k eval (optional, diagnostic)
+- `svamp_eval.jsonl` — SVAMP eval (optional, diagnostic)
 - `openmath_instruct_2_probe.jsonl` — dataset probe
 
 Loaders in `data.py` check local files **before** falling back to HuggingFace streaming. For air-gapped deployments, ensure these files are present — no internet needed.
 
 ## Model loading quirks
 
-- **SFT**: loads raw base model (`Qwen/Qwen2.5-1.5B`), applies LoRA, trains, then **merges** to `outputs/sft_checkpoint/merged/`. The merged directory is required for vLLM.
+- **SFT**: loads raw base model (`Qwen/Qwen2.5-1.5B`), applies LoRA, trains, then **merges** to `outputs/sft_checkpoint/merged/`. The merged directory is required for vLLM. `run_sft.py` now checks local HF/ModelScope cache first — no re-downloads if model exists.
 - **GRPO**: loads the **merged** SFT checkpoint (not the adapter), then applies a fresh LoRA on top. Uses `load_in_4bit=False` with Unsloth or `BitsAndBytesConfig` otherwise.
-- **Evaluation**: loads base model + loads LoRA adapter via `PeftModel.from_pretrained()` (no merge). Uses `model_cfg["name"]` not the SFT path for the base model.
-- **Tokenizer**: `padding_side` must be `"left"` for decoder-only generation — `get_tokenizer()` in `data.py:337` handles this. Set `pad_token = eos_token` if missing.
+- **Evaluation**: merges LoRA adapter into base model via `_merge_ckpt_for_vllm()`, then uses vLLM for batch generation. Strict XML parsing (requires `<think>` + `<answer>` tags).
+- **Tokenizer**: `padding_side` must be `"left"` for decoder-only generation — `get_tokenizer()` in `data.py` handles this. Set `pad_token = eos_token` if missing. Now auto-sets `fix_mistral_regex=True` to suppress harmless warning.
 
 ## Experimental cohorts (in config.yaml)
 
@@ -90,9 +93,9 @@ Loaders in `data.py` check local files **before** falling back to HuggingFace st
 | A | 0.5 | 1.5 | No | No |
 | B | 1.5 | 0.2 | No | No |
 | C | 1.0 | 0.2 | Yes (0.2/0.5/1.0) | No |
-| D | 1.0 | 1.0×e^(-γt) | No | Yes (γ=0.01) |
+| D | 1.0 | 1.0×e^(-γt) | No | Yes (γ=0.005) |
 
-Cohort D requires `gater.step()` called every optimizer step — this is handled by `DynamicGaterCallback` registered in `StabilizedGRPOTrainer.__init__` (`grpo_trainer.py:56`). If you fork training logic, ensure the gater still advances.
+**Empirically validated**: baseline = zero reward (mathematically dead). Cohort D > baseline on all benchmarks. γ=0.01 was too fast (decayed before model learned); γ=0.005 is current optimal. Cohort D requires `gater.step()` called every optimizer step — this is handled by `DynamicGaterCallback` registered in `StabilizedGRPOTrainer.__init__` (`grpo_trainer.py:56`).
 
 ## Stabilization layers
 
@@ -100,39 +103,61 @@ Defined in `stabilization.py`, applied inside `StabilizedGRPOTrainer._compute_lo
 
 - **PSPO** (δ=0.1): Smooths policy logprobs toward reference — `pspo_smooth_logprobs()`.
 - **Entropy filter** (H > ln(2)): Zeroes advantages for high-entropy rollouts — `entropy_filter_mask()`.
-- **K3 KL**: Unbiased low-variance estimator — `r - log(r) - 1`, native in TRL 1.0.0. No custom implementation needed.
+- **K3 KL**: Unbiased low-variance estimator — `r - log(r) - 1`, native in TRL 1.0.0.
 
 These are controlled by `config.yaml → training.stabilization.*`.
 
+## vLLM / GPU Configuration
+
+- **`vllm_memory_utilization: 0.65`** — empirically validated sweet spot for RTX 3090 (24GB). 0.75 caused GPU thrashing (9.9s/step → 2.3s/step). 0.85 OOMs. Do not change.
+- **`generation_batch_size = G × 2`** — this is essential for speed. Setting to G (4) creates twice as many vLLM calls, doubling per-step time. Setting to G × 4 (16) causes choppy batching. G×2=8 is optimal.
+- **GPU fragmentation**: After multiple Ctrl+C restarts, step_time degrades from ~7s to ~12s. Only fix: reboot instance or rent new GPU. Fresh GPU = fast training.
+
+## Evaluation Protocol
+
+- **Benchmarks**: MATH-500 + AIME24 (per methodology §6). GSM8k and SVAMP are available as optional `--benchmarks gsm8k` overrides for supervisor demos.
+- **Scoring**: Strict XML only — requires both `<think>` and `<answer>` tags. Answer extracted from `<answer>` tag, compared with 1e-5 tolerance. No lenient fallback, no few-shot prompting.
+- **vLLM batch eval**: Uses `gpu_memory_utilization=0.5` (lower than training to avoid OOM alongside other processes).
+- **First eval downloads model** (3GB, ~40 min). After caching, subsequent evals are instant. Use `_resolve_model_path()` which checks: HF cache → ModelScope cache → SFT merged checkpoint.
+
 ## Known issues
 
-- **EOS-looping**: Qwen2.5-1.5B over-generates endless repetitions (confirmed in `debug_g1_completions.json` / `debug_g2_completions.json` — hundreds of `</think>`/`</blockquote>` tags). Mitigation: `max_completion_length` capped at 512 in config. Raise back to 1792 only after verifying EOS behavior.
-- **`filter_probe.enabled: false`** in config: the all-zero filter is disabled because it's too strict for the 1.5B model. If you enable it, expect <2% retention and 0-sample datasets.
-- **OOM on 24GB**: Reduce `max_completion_length` to 256 or `num_generations` to 2.
-- **vLLM in test-run**: `use_vllm=False` is hardcoded in `run_grpo.py:370` for test-runs (too heavy). Full runs use vLLM.
-- **`generation_batch_size`** must equal `num_generations` in `GRPOConfig` (TRL 1.0.0 requirement).
+- **EOS-looping**: Qwen2.5-1.5B generates endless repetitive `</think>`/`</blockquote>` tags. Mitigation: `max_completion_length=512` in config. This caps both GRPO training and evaluation. Raise only after verifying EOS behavior is fixed.
+- **Baseline (λ_format=0) = zero reward**: Expected behavior. All completions score 0.0 → σ(R)=0 → advantage=0 → no learning. This is the key finding proving SFT + format guidance are mandatory for 1.5B models.
+- **Entropy stalls above ln(2)**: Model entropy hovers at 2.4–3.4 across entire training run. Entropy filter is always active. Stronger SFT (10K×2) helps but doesn't fully resolve. This is a known limitation of 1.5B-scale GRPO.
+- **`filter_probe.enabled: false`** in config: the all-zero filter is disabled because it's too strict for the 1.5B model. Use `filter_offline.py` instead.
+- **OOM on 24GB**: Reduce `max_completion_length` to 256 or `num_generations` to 2. Typical stable config: G=4, vLLM=0.65, prompt=256, completion=512.
 - **`packing=False`** in SFT config — must remain false; the dataset uses pre-formatted chat templates.
-- **`load_in_4bit` asymmetry in GRPO**: Unsloth path uses `load_in_4bit=False` (full precision from merged checkpoint) while the BnB fallback uses `load_in_4bit=True`. This means GRPO runs with different quantization depending on whether Unsloth is available — results may differ between environments.
+- **`load_in_4bit` asymmetry in GRPO**: Unsloth path uses `load_in_4bit=False` (full precision) while the BnB fallback uses `load_in_4bit=True`. Results may differ between environments.
+- **Checkpoint resume progress bar**: Resets to 0 after resume — cosmetic. Model/dataset/optimizer are correctly restored.
+- **Trainer saves 50-step checkpoints, auto-deletes after training**: `save_total_limit=2` keeps at most 2 during training. After training, checkpoint cleanup deletes all remaining checkpoint dirs (final adapter is saved separately).
 
-## Test-run mode
+## Transferring Between Instances
 
-`--test-run` reduces all scale parameters (samples, epochs, seeds) to values in `config.yaml → test_run`. When `run_all.py` receives `--test-run`, it writes a temporary config to `outputs/test_run/_config.yaml` with overrides and passes it to subprocesses. The test-run report is written incrementally to `outputs/test_run/report.txt`.
+The only irreplaceable files (not in git or downloadable):
 
-Use `--test-run --dry-run` first (no GPU, ~5 seconds) to validate config/imports/rewards before using real GPU time.
+```
+outputs/sft_checkpoint/merged/           # ~3GB — trained SFT model
+outputs/filtered_grpo/filtered_dataset.jsonl  # ~2MB — 1,287 solvable prompts
+```
 
-## Misc directories
+```bash
+# From old instance to Google Cloud / local:
+tar czf thesis-grpo.tar.gz outputs/sft_checkpoint/merged outputs/filtered_grpo/filtered_dataset.jsonl *.py config.yaml data/
 
-- **`docs/`** — `Synthesized Methodology.md` (theoretical paper, G=16, Big-Math dataset, max_completion=1792) and `revision.md` (critique recommending OpenMathInstruct-2, 50K samples, SFT cold start). These describe the *ideal* experiment. The actual config has been scaled down (G=4, max_completion=512) to work around EOS-looping on Qwen2.5-1.5B.
-- **`diag/`** — diagnostic artifacts from a previous test-run (config, log, report). Safe to clean up.
-- **`filter_tune/`** — cached filter tuning results (CSV, JSON). Generated by `filter_tune.py`.
-- **`stuff/`** — miscellaneous archive. Not part of the pipeline.
+# On new instance:
+tar xzf thesis-grpo.tar.gz -C ~/thesis-grpo/
+cd ~/thesis-grpo && python data/download_datasets.py --sft-samples 10000
+python run_all.py --skip-sft --cohorts D --seeds 0
+```
 
-## Tool interop
+## References
 
-- **`filter_tune.py`** imports `format_grpo_prompt` and `_check_answer` from `data.py` — any changes to answer checking logic in `data.py` propagate here.
-- **`probe_dataset.py`** imports `format_grpo_prompt` and `_check_answer` from `data.py` — same.
-- **`filter_benchmark.py`** and **`filter_offline.py`** import from `data.py` — consistent.
-- **`evaluate.py`** uses its own `_extract_answer` import from `rewards.py` and `format_grpo_prompt` from `data.py`. Local JSONL files are normalized to match HF column names on load.
+- **`ARCHITECTURE.md`** — full methodology, validation results, parameter justification, 12 bugs fixed, run commands
+- **`chats/SESSION-2026-06-09.md`** — complete session state (pipeline progress, findings, config)
+- **`docs/Synthesized Methodology.md`** — theoretical paper (G=16, Big-Math, max_completion=1792 — ideal, not current)
+- **`docs/revision.md`** — critique recommending OpenMathInstruct-2, 50K samples, SFT cold start
+- **`RUNBOOK.md`** — production deployment guide with troubleshooting
 
 ## Style notes
 

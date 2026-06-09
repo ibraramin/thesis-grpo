@@ -1,1 +1,0 @@
-1. Ask deepseek to benchmark the filtertune between pre sft model vs the post sft model to see if the sft actually increase the models capabilities. 
