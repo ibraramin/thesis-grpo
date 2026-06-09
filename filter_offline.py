@@ -39,6 +39,8 @@ def parse_args():
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--sft-checkpoint", default="outputs/sft_checkpoint/merged")
     parser.add_argument("--prompts", type=int, default=30000)
+    parser.add_argument("--skip", type=int, default=0,
+                        help="Skip first N prompts (for resuming/merging filter runs)")
     parser.add_argument("--g", type=int, default=4, help="Generations per prompt")
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=32,
@@ -79,15 +81,19 @@ def main():
     )
 
     # ── Load dataset ────────────────────────────────────────────
-    print(f"Loading dataset: {dataset_name} (max {args.prompts} prompts)")
+    skip_n = args.skip
+    max_prompts = args.prompts + skip_n
+    print(f"Loading dataset: {dataset_name} (skip {skip_n}, max {args.prompts} prompts)")
     # Prefer local JSONL (offline), fall back to HF streaming
     if os.path.exists(GRPO_LOCAL):
         print(f"  Using local file: {GRPO_LOCAL}")
         rows = []
         with open(GRPO_LOCAL) as f:
             for i, line in enumerate(f):
-                if i >= args.prompts:
+                if i >= max_prompts:
                     break
+                if i < skip_n:
+                    continue
                 row = json.loads(line)
                 problem = row.get("problem", "")
                 answer = row.get("answer", "")
@@ -99,8 +105,10 @@ def main():
         ds = load_dataset(dataset_name, split="train", streaming=True, token=True)
         rows = []
         for i, row in enumerate(ds):
-            if i >= args.prompts:
+            if i >= max_prompts:
                 break
+            if i < skip_n:
+                continue
             problem = row.get("problem", "")
             answer = row.get("answer") or row.get("expected_answer", "")
             if problem and answer:
@@ -131,13 +139,15 @@ def main():
                 correct_prompts += 1
 
     # ── Save ────────────────────────────────────────────────────
-    with open(args.output, "w") as f:
+    mode = "a" if skip_n > 0 else "w"
+    with open(args.output, mode) as f:
         for entry in kept:
             f.write(json.dumps(entry) + "\n")
 
     retention = (len(kept) / total * 100) if total > 0 else 0
+    mode_str = "appended to" if skip_n > 0 else "saved to"
     print(f"\nFiltered: {len(kept)} / {total} prompts kept ({retention:.1f}%)")
-    print(f"Saved to: {args.output}")
+    print(f"{mode_str.title()}: {args.output}")
 
     if retention < 1:
         print("WARNING: Retention < 1% — SFT model may be too weak for this dataset.")
