@@ -103,8 +103,8 @@ evaluation:
     - math500
     - aime24
   # Optional: gsm8k, svamp for diagnostic/supervisor demos
-  num_seeds: 4
-  max_new_tokens: 512
+  num_seeds: 1              # fast demo — 1 seed per cohort
+  max_new_tokens: 384
   temperature: 0.0          # greedy
 
 # ── Test-Run Overrides (for --test-run flag) ────────────────────
