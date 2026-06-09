@@ -29,15 +29,15 @@ training:
 
   grpo:
     dataset: "nvidia/OpenMathInstruct-2"  # local: data/openmath_instruct_2_grpo.jsonl
-    max_samples: 800            # ~400 optimizer steps; fast demo, still above 300 min
+    max_samples: 1287           # use all filtered prompts
     epochs: 1
-    learning_rate: 2.0e-6
+    learning_rate: 5.0e-6       # validation-proven learning rate
     warmup_ratio: 0.1
-    num_generations: 4         # G=4 proven effective in validation
-    max_prompt_length: 128      # shorter prompts = faster generation
-    max_completion_length: 384  # tighter cap, still enough for reasoning
-    gradient_accumulation_steps: 2  # 400 optimizer steps @ 800 samples
-    vllm_memory_utilization: 0.5   # lower: 0.75 caused GPU thrashing at 9.9s/step
+    num_generations: 4         # G=4 — proven fast and effective
+    max_prompt_length: 256      # validation-proven
+    max_completion_length: 512  # validation-proven
+    gradient_accumulation_steps: 4  # 322 optimizer steps (1287/4), above 300 minimum
+    vllm_memory_utilization: 0.65  # validation-proven
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
     difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)
@@ -102,9 +102,8 @@ evaluation:
   benchmarks:
     - math500
     - aime24
-  # Optional: gsm8k, svamp for diagnostic/supervisor demos
-  num_seeds: 1              # fast demo — 1 seed per cohort
-  max_new_tokens: 384
+  num_seeds: 2
+  max_new_tokens: 512
   temperature: 0.0          # greedy
 
 # ── Test-Run Overrides (for --test-run flag) ────────────────────
