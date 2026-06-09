@@ -13,3 +13,7 @@ build/
 *.log
 session*.md
 drive-download*
+rev.md
+chats/
+filtered_dataset.jsonl
+sft_merged/
