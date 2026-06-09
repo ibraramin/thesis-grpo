@@ -33,10 +33,10 @@ training:
     epochs: 1
     learning_rate: 2.0e-6       # revision.md: 2e-6 for stable convergence
     warmup_ratio: 0.1
-    num_generations: 8         # G — group size (8 for better advantage estimation)
+    num_generations: 4         # G=4 proven effective in validation; fast enough for demo
     max_prompt_length: 256
     max_completion_length: 512  # Cap for EOS-looping; raise to 1792 once fixed
-    gradient_accumulation_steps: 2  # 625 optimizer steps @ 1250 filtered samples
+    gradient_accumulation_steps: 2  # 643 optimizer steps @ 1287 samples × G=4
     vllm_memory_utilization: 0.65  # scales with free VRAM; 0.3 is conservative
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
