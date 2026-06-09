@@ -36,7 +36,7 @@ training:
     num_generations: 8         # G — group size (8 for better advantage estimation)
     max_prompt_length: 256
     max_completion_length: 512  # Cap for EOS-looping; raise to 1792 once fixed
-    gradient_accumulation_steps: 4  # ~300+ optimizer steps on filtered data
+    gradient_accumulation_steps: 2  # 625 optimizer steps @ 1250 filtered samples
     vllm_memory_utilization: 0.65  # scales with free VRAM; 0.3 is conservative
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
