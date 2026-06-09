@@ -37,7 +37,7 @@ training:
     max_prompt_length: 128      # shorter prompts = faster generation
     max_completion_length: 384  # tighter cap, still enough for reasoning
     gradient_accumulation_steps: 2  # 400 optimizer steps @ 800 samples
-    vllm_memory_utilization: 0.75  # push to ~18GB for faster generation
+    vllm_memory_utilization: 0.5   # lower: 0.75 caused GPU thrashing at 9.9s/step
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
     difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)
