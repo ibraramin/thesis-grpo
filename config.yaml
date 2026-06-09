@@ -29,15 +29,15 @@ training:
 
   grpo:
     dataset: "nvidia/OpenMathInstruct-2"  # local: data/openmath_instruct_2_grpo.jsonl
-    max_samples: 50000          # use full 50K local dataset
+    max_samples: 800            # ~400 optimizer steps; fast demo, still above 300 min
     epochs: 1
-    learning_rate: 2.0e-6       # revision.md: 2e-6 for stable convergence
+    learning_rate: 2.0e-6
     warmup_ratio: 0.1
-    num_generations: 4         # G=4 proven effective in validation; fast enough for demo
-    max_prompt_length: 256
-    max_completion_length: 512  # Cap for EOS-looping; raise to 1792 once fixed
-    gradient_accumulation_steps: 2  # 643 optimizer steps @ 1287 samples × G=4
-    vllm_memory_utilization: 0.65  # scales with free VRAM; 0.3 is conservative
+    num_generations: 4         # G=4 proven effective in validation
+    max_prompt_length: 128      # shorter prompts = faster generation
+    max_completion_length: 384  # tighter cap, still enough for reasoning
+    gradient_accumulation_steps: 2  # 400 optimizer steps @ 800 samples
+    vllm_memory_utilization: 0.75  # push to ~18GB for faster generation
     beta: 0.04                # KL penalty coefficient
     epsilon: 0.2              # PPO clip range
     difficulty_scale: true     # DW-GRPO: λ_correct(q) = 1 + α·Var(rewards)
