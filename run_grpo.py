@@ -365,7 +365,7 @@ def main():
         optim="adamw_8bit",
         max_completion_length=grpo_cfg["max_completion_length"],
         num_generations=grpo_cfg["num_generations"],
-        generation_batch_size=grpo_cfg["num_generations"],  # must match G for smooth training
+        generation_batch_size=grpo_cfg["num_generations"] * 2,  # G×2=8 balances speed vs VRAM
         beta=grpo_cfg["beta"],
         loss_type="grpo",
         use_vllm=not test_run,          # Disable vLLM for test-run (too heavy)
