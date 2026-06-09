@@ -359,13 +359,13 @@ def main():
         warmup_ratio=grpo_cfg["warmup_ratio"],
         logging_steps=5,
         save_strategy="steps",
-        save_steps=50,
+        save_steps=25,
         save_total_limit=2,            # Keep only last 2 checkpoints (~500MB each)
         bf16=torch.cuda.is_bf16_supported(),
         optim="adamw_8bit",
         max_completion_length=grpo_cfg["max_completion_length"],
         num_generations=grpo_cfg["num_generations"],
-        generation_batch_size=grpo_cfg["num_generations"] * 4,  # batch 16 completions per vLLM call for speed
+        generation_batch_size=grpo_cfg["num_generations"],  # must match G for smooth training
         beta=grpo_cfg["beta"],
         loss_type="grpo",
         use_vllm=not test_run,          # Disable vLLM for test-run (too heavy)
