@@ -38,7 +38,7 @@ BENCHMARKS = {
     },
     "aime24": {
         "dataset": "math-ai/aime24",
-        "split": "train",
+        "split": "test",
         "problem_col": "problem",
         "answer_col": "solution",  # AIME24 stores answer in solution field
     },
