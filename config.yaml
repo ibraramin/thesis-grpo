@@ -61,7 +61,7 @@ training:
   stabilization:
     pspo_enabled: true
     pspo_delta: 0.1           # smoothing coefficient δ
-    entropy_filter_enabled: true
+    entropy_filter_enabled: false  # disabled: 152K-vocab model entropy always > ln(2); PSPO+K3 KL sufficient
     entropy_threshold: 0.693  # ln(2)
     kl_estimator: "k3"        # "k1" | "k3" (Schulman unbiased)
 
