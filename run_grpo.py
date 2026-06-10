@@ -379,6 +379,7 @@ def main():
     print(f"[GRPO]   PSPO: {stab_cfg['pspo_enabled']} (δ={stab_cfg['pspo_delta']})")
     print(f"[GRPO]   Entropy filter: {stab_cfg['entropy_filter_enabled']} "
           f"(threshold={stab_cfg['entropy_threshold']})")
+    print(f"[GRPO]   Sign advantage: {stab_cfg.get('sign_advantage', True)}")
 
     trainer = StabilizedGRPOTrainer(
         model=model,
@@ -390,6 +391,7 @@ def main():
         pspo_delta=stab_cfg["pspo_delta"],
         entropy_filter_enabled=stab_cfg["entropy_filter_enabled"],
         entropy_threshold=stab_cfg["entropy_threshold"],
+        use_sign_advantage=stab_cfg.get("sign_advantage", True),
         dynamic_gater=gater,
     )
 
