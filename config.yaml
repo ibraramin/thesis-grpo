@@ -96,6 +96,12 @@ cohorts:
     graduated: false
     dynamic: true
     gamma: 0.005        # decay coefficient (slower: half-life ~139 opt-steps)
+  max:
+    correctness: 1.0
+    format: 1.0         # initial; decays
+    graduated: true     # Cohort C: partial credit 0.2/0.5/1.0
+    dynamic: true       # Cohort D: format decays λ_format(t) = e^(-γt)
+    gamma: 0.005        # slower decay, proven stable
 
 # ── Evaluation ─────────────────────────────────────────────────
 evaluation:
