@@ -5,8 +5,8 @@
 model:
   name: "Qwen/Qwen2.5-1.5B"
   load_in_4bit: true
-  lora_r: 256               # revise2.md §7: uniform high-rank for flat GRPO gradients
-  lora_alpha: 512           # α = 2×r per convention
+  lora_r: 64                # conservative: 1.5B model, proven stable
+  lora_alpha: 128           # α = 2×r per convention
   lora_targets:
     - q_proj
     - k_proj
@@ -31,7 +31,7 @@ training:
     dataset: "nvidia/OpenMathInstruct-2"  # local: data/openmath_instruct_2_grpo.jsonl
     max_samples: 1287           # use all filtered prompts
     epochs: 1
-    learning_rate: 1.0e-5       # revise2.md §7.3: LoRA needs 10× larger LR than full FT
+    learning_rate: 5.0e-6       # proven stable for 1.5B
     warmup_ratio: 0.1
     num_generations: 4         # G=4 — proven fast and effective
     max_prompt_length: 256      # validation-proven
@@ -64,7 +64,6 @@ training:
     entropy_filter_enabled: false  # disabled: 152K-vocab model entropy always > ln(2); PSPO+K3 KL sufficient
     entropy_threshold: 0.693  # ln(2)
     kl_estimator: "k3"        # "k1" | "k3" (Schulman unbiased)
-    sign_advantage: true       # A=2r-1 instead of group-mean normalization (revise2.md §4.1)
 
 # ── Experimental Cohorts ──────────────────────────────────────
 # Each entry: {correctness, format, graduated, dynamic}

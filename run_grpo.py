@@ -391,7 +391,6 @@ def main():
         pspo_delta=stab_cfg["pspo_delta"],
         entropy_filter_enabled=stab_cfg["entropy_filter_enabled"],
         entropy_threshold=stab_cfg["entropy_threshold"],
-        use_sign_advantage=stab_cfg.get("sign_advantage", True),
         dynamic_gater=gater,
     )
 

@@ -43,7 +43,6 @@ class StabilizedGRPOTrainer(GRPOTrainer):
         pspo_enabled: bool = True,
         entropy_threshold: float = 0.693,
         entropy_filter_enabled: bool = True,
-        use_sign_advantage: bool = False,
         dynamic_gater=None,
         *args,
         **kwargs,
@@ -53,7 +52,6 @@ class StabilizedGRPOTrainer(GRPOTrainer):
         self._pspo_enabled = pspo_enabled
         self._entropy_threshold = entropy_threshold
         self._entropy_filter_enabled = entropy_filter_enabled
-        self._use_sign_advantage = use_sign_advantage
         # Register dynamic gater callback for Cohort D (§3.4)
         if dynamic_gater is not None:
             self.add_callback(DynamicGaterCallback(dynamic_gater))
@@ -99,20 +97,10 @@ class StabilizedGRPOTrainer(GRPOTrainer):
         else:
             entropy_keep = None
 
-        # ── [SIGN] Sign Advantage (revise2.md §4.1) ─────────────
+        # ── Standard: compute advantages ───────────────────────
         advantages = inputs["advantages"]
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
-
-        if self._use_sign_advantage:
-            # Sign Advantage: A = 2r - 1, deduced from GRPO-averaged advantages.
-            # For non-degenerate groups: positive/negative sigils align with r=1/r=0.
-            # For degenerate groups (all-zero advantage): treated as all-wrong.
-            # Weak SFT models (p<0.1) make all-right groups vanishingly rare.
-            advantages = torch.where(
-                advantages > 1e-8, torch.ones_like(advantages),
-                torch.where(advantages < -1e-8, -torch.ones_like(advantages),
-                -torch.ones_like(advantages)))  # degenerate → all-wrong → -1
 
         # ── Standard: log-ratio ────────────────────────────────
         old_per_token_logps = inputs.get("old_per_token_logps")
