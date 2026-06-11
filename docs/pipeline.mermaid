@@ -1,0 +1,67 @@
+```mermaid
+flowchart TD
+    A["<b>Qwen2.5-1.5B</b><br/>Base Model<br/><i>Unseen math</i>"]
+    
+    subgraph SFT["<b>Phase 1: SFT Cold Start</b><br/><i>1.5 hr · RTX 3090</i>"]
+        B["OpenR1-Math-220k<br/>5K samples · 1 epoch"]
+        C["Causal LM Training<br/>LoRA r=64 · α=128 · 4-bit"]
+        D["<b>Merged SFT Model</b><br/><i>✗→✓ format: 3% → 24.8%<br/>✗→✓ math: 0.2% → 6.6%</i>"]
+    end
+
+    subgraph Filter["<b>Phase 1.5: Offline Filter</b><br/><i>20 min · vLLM G=8</i>"]
+        E["OpenMathInstruct-2<br/>10K prompts"]
+        F["vLLM generates G=8<br/>completions per prompt"]
+        G{"≥1 correct<br/>completion?"}
+        H["<b>Filtered Dataset</b><br/><i>1,287 solvable prompts<br/>12.9% retention</i>"]
+        I["✗ Discard<br/><i>87% unsolvable</i>"]
+    end
+
+    subgraph GRPO["<b>Phase 2: GRPO Training</b><br/><i>2 hr per cohort · G=4</i>"]
+        J["StabilizedGRPOTrainer<br/>PSPO δ=0.1 · K3 KL · β=0.04"]
+        K["5 Reward Cohorts"]
+        K1["<b>baseline</b><br/>λ_c=1.0 · λ_f=0.0<br/><i>proved dead: σ=0</i>"]
+        K2["<b>A</b><br/>λ_c=0.5 · λ_f=1.5<br/><i>static heavy format</i>"]
+        K3["<b>B</b><br/>λ_c=1.5 · λ_f=0.2<br/><i>static light format</i>"]
+        K4["<b>C</b><br/>graduated · λ_f=0.2<br/><i>partial credit</i>"]
+        K5["<b>D ★</b><br/>λ_c=1.0 · λ_f=e^(-0.01t)<br/><i>dynamic decay (best)</i>"]
+        L["178 optimizer steps<br/>711-1287 prompts"]
+        M["<b>LoRA Adapter</b><br/>per cohort · per seed"]
+    end
+
+    subgraph Eval["<b>Phase 3: Evaluation</b><br/><i>5 min · vLLM T=0</i>"]
+        N["Merge LoRA → vLLM<br/>batch generation"]
+        O1["GSM8k<br/><i>1,319 problems</i>"]
+        O2["SVAMP<br/><i>1,000 problems</i>"]
+        O3["MATH-500<br/><i>500 problems</i>"]
+        O4["AIME24<br/><i>30 problems</i>"]
+        P["Strict XML Parsing<br/><think> + <answer>"]
+        Q["<b>results.csv</b>"]
+    end
+
+    subgraph Analysis["<b>Phase 4: Analysis</b><br/><i>1 min</i>"]
+        R["ANOVA · Tukey HSD<br/>Bar Charts"]
+        S["<b>analysis_summary.csv</b>"]
+    end
+
+    A --> B --> C --> D
+    D --> E --> F --> G
+    G -->|"Yes"| H
+    G -->|"No"| I
+    H --> J
+    J --> K
+    K --> K1 & K2 & K3 & K4 & K5
+    K1 & K2 & K3 & K4 & K5 --> L --> M
+    M --> N
+    N --> O1 & O2 & O3 & O4
+    O1 & O2 & O3 & O4 --> P --> Q
+    Q --> R --> S
+
+    style A fill:#2d3748,stroke:#4a5568,color:#e2e8f0
+    style D fill:#276749,stroke:#48bb78,color:#fff
+    style H fill:#276749,stroke:#48bb78,color:#fff
+    style K5 fill:#744210,stroke:#d69e2e,color:#fff
+    style K1 fill:#9b2c2c,stroke:#fc8181,color:#fff
+    style I fill:#9b2c2c,stroke:#fc8181,color:#fff
+    style Q fill:#2a4365,stroke:#63b3ed,color:#fff
+    style S fill:#2a4365,stroke:#63b3ed,color:#fff
+```
